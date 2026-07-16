@@ -1,0 +1,1751 @@
+
+    let scene, camera, renderer;
+    let player, playerHP = 100, maxHP = 100, score = 0;
+    let bullets = [];
+    let enemies = [];
+    let items = []; 
+    let particles = []; 
+    let keys = {};
+    
+    let isGameStarted = false; 
+    let isGameOver = false;
+    let isPaused = false;
+
+    // 難易度設定
+    let currentDifficulty = 'normal'; // easy, normal, hard
+
+    // 耐久モード（Survival Mode）関連の変数
+    let isSurvivalMode = false;
+    let survivalTimeLimit = 30; // 30, 60, 120
+    let survivalTimer = 0.0;
+
+    // キャラクター設定
+    let currentSelectedType = 'cobalt';
+    let currentSelectedSubWeapon = 'missile';
+    let activeFighterConfig = {
+        color: 0x00ffff,
+        bulletColor: 0x00ffff,
+        baseCooldown: 28,
+        rapidCooldown: 6,
+        bulletScale: 1.0,
+        damage: 1
+    };
+
+    // 操作用
+    let isMousePressing = false;       
+    let shootCooldown = 0;             
+
+    // サブウェポン状態（60fps基準）
+    let subWeaponCooldown = 0;
+    let shieldGauge = 100;
+    let shieldOverheatTimer = 0;
+    let isSubShieldActive = false;
+
+    // 自機パーツ
+    let playerCockpit, playerLeftWing, playerRightWing, playerThruster;
+    let barrierVisual = null; 
+    let invincibleBarrierVisual = null; 
+    let subShieldVisual = null;
+    let gridHelper = null;
+
+    // バフ/タイマー
+    let invincibleTimer = 0;
+    let multishotTimer = 0;
+    let rapidfireTimer = 0; 
+    let shieldStrength = 0; 
+
+    // ジョイスティック用（DOM生成後に安全に取得するため宣言のみにする）
+    let joystick = null;
+    let knob = null;
+    let joystickActive = false;
+    let joystickStart = new THREE.Vector2();
+    let moveDirection = new THREE.Vector3();
+
+    // 生成タイマー
+    let spawnInterval;
+    let itemSpawnInterval;
+
+    const FIGHTER_PRESETS = {
+        cobalt: {
+            color: 0x00ffff,
+            bulletColor: 0x00ffff,
+            baseCooldown: 25,
+            rapidCooldown: 6,
+            bulletScale: 1.2, 
+            damage: 1
+        },
+        redline: {
+            color: 0xff3366,
+            bulletColor: 0xff3366,
+            baseCooldown: 14, 
+            rapidCooldown: 4,  
+            bulletScale: 1.0,
+            damage: 0.9
+        },
+        vortex: {
+            color: 0x9900ff,
+            bulletColor: 0xcc66ff,
+            baseCooldown: 26,
+            rapidCooldown: 7,
+            bulletScale: 1.1,
+            damage: 1
+        },
+        horizon: {
+            color: 0xff5500,
+            bulletColor: 0xffaa00,
+            baseCooldown: 36, 
+            rapidCooldown: 10,
+            bulletScale: 2.2, 
+            damage: 2.2         
+        },
+        gaia: {
+            color: 0xccff00,
+            bulletColor: 0xccff00,
+            baseCooldown: 24,
+            rapidCooldown: 6,
+            bulletScale: 1.1,
+            damage: 1
+        }
+    };
+
+    const SUB_WEAPON_PRESETS = {
+        missile: {
+            name: 'MULTI MISSILE',
+            color: 0xff33cc,
+            cooldown: 420,
+            damage: 2.2
+        },
+        beam: {
+            name: 'NOVA BEAM',
+            color: 0x66e0ff,
+            cooldown: 300,
+            damage: 9
+        },
+        shield: {
+            name: 'HOLD SHIELD',
+            color: 0x00ffcc,
+            lockout: 240,
+            drainPerFrame: 0.56,
+            rechargePerFrame: 0.18
+        }
+    };
+
+    // 🌟 ランキング管理用オブジェクト
+    const DEFAULT_LEADERBOARDS = {
+        easy: [
+            { name: "Cobalt-X", score: 8000 },
+            { name: "Fighter-01", score: 5500 },
+            { name: "Neo-05", score: 4000 },
+            { name: "Striker", score: 2500 },
+            { name: "Dodge-Man", score: 1000 }
+        ],
+        normal: [
+            { name: "Z-Striker", score: 12000 },
+            { name: "Neon-Pilot", score: 9000 },
+            { name: "Star-Lord", score: 6500 },
+            { name: "Omega", score: 4500 },
+            { name: "Novice", score: 2000 }
+        ],
+        hard: [
+            { name: "Z-Infinity", score: 18000 },
+            { name: "Horizon-S", score: 13500 },
+            { name: "Redline-X", score: 10000 },
+            { name: "Glitch-H", score: 7000 },
+            { name: "Overlord", score: 3000 }
+        ]
+    };
+
+    // セキュリティ制約等に備えるフォールバック用ストレージ
+    let backupStorage = {};
+
+    function safeGetItem(key) {
+        try { return localStorage.getItem(key); } catch (e) { return backupStorage[key] || null; }
+    }
+
+    function safeSetItem(key, value) {
+        try { localStorage.setItem(key, value); } catch (e) { backupStorage[key] = value; }
+    }
+
+    // ランキングデータの読み込み
+    function loadLeaderboard(diff) {
+        const key = `neon_strike_ranking_${diff}`;
+        const data = safeGetItem(key);
+        if (data) {
+            try { return JSON.parse(data); } catch (e) { return DEFAULT_LEADERBOARDS[diff]; }
+        } else {
+            safeSetItem(key, JSON.stringify(DEFAULT_LEADERBOARDS[diff]));
+            return DEFAULT_LEADERBOARDS[diff];
+        }
+    }
+
+    // ランキングに登録可能（トップ5以内）か確認
+    function checkLeaderboardEligibility(diff, scoreToCheck) {
+        if (scoreToCheck <= 0) return false;
+        const currentList = loadLeaderboard(diff);
+        if (currentList.length < 5) return true;
+        return scoreToCheck > currentList[currentList.length - 1].score;
+    }
+
+    // スコアの保存
+    function saveLeaderboardScore(diff, name, scoreToSave) {
+        const list = loadLeaderboard(diff);
+        const pilotName = name.trim() || "PILOT";
+        list.push({ name: pilotName, score: scoreToSave });
+        list.sort((a, b) => b.score - a.score);
+        const prunedList = list.slice(0, 5);
+        safeSetItem(`neon_strike_ranking_${diff}`, JSON.stringify(prunedList));
+    }
+
+    // ランキングUI表示の更新
+    let activeLeaderboardTab = 'normal';
+    function openLeaderboard() {
+        document.getElementById('leaderboard-modal').style.display = 'block';
+        switchLeaderboardTab(currentDifficulty);
+    }
+
+    // 閉じる
+    function closeLeaderboard() {
+        document.getElementById('leaderboard-modal').style.display = 'none';
+    }
+
+    // 難易度別タブの切り替え
+    function switchLeaderboardTab(diff) {
+        const tabs = {
+            easy: document.getElementById('tab-easy-btn'),
+            normal: document.getElementById('tab-normal-btn'),
+            hard: document.getElementById('tab-hard-btn')
+        };
+
+        for (const [key, btn] of Object.entries(tabs)) {
+            if (!btn) continue;
+            btn.className = 'leaderboard-tab-btn';
+            if (key === diff) {
+                btn.classList.add(`active-${diff}`);
+            }
+        }
+
+        const listData = loadLeaderboard(diff);
+        const container = document.getElementById('leaderboard-rows-container');
+        if (!container) return;
+        container.innerHTML = '';
+
+        listData.forEach((item, index) => {
+            const rank = index + 1;
+            const row = document.createElement('div');
+            row.className = `leaderboard-row rank-${rank}`;
+            row.innerHTML = `
+                <span class="rank-num">#${rank}</span>
+                <span class="rank-name">${escapeHTML(item.name)}</span>
+                <span class="rank-score">${item.score.toLocaleString()} PTS</span>
+            `;
+            container.appendChild(row);
+        });
+    }
+
+    // スコア送信処理
+    function submitScore() {
+        const input = document.getElementById('player-name-input');
+        if (!input) return;
+        const name = input.value.trim() || "PILOT";
+        
+        saveLeaderboardScore(currentDifficulty, name, score);
+        showNotification("RECORD SAVED!", "#00ff55");
+
+        document.getElementById('rank-in-container').style.display = 'none';
+        openLeaderboard();
+    }
+
+    function escapeHTML(str) {
+        return str.replace(/[&<>'"]/g, 
+            tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+        );
+    }
+
+    // 画面中央通知メッセージ
+    function showNotification(text, color = "#ffffff") {
+        const notif = document.getElementById('notification');
+        if (!notif) return;
+        notif.innerText = text;
+        notif.style.color = color;
+        notif.style.textShadow = `0 0 15px ${color}`;
+        notif.style.opacity = '1';
+        notif.style.transform = 'translate(-50%, -50%) scale(1.1)';
+
+        setTimeout(() => {
+            notif.style.opacity = '0';
+            notif.style.transform = 'translate(-50%, -50%) scale(0.9)';
+        }, 1500);
+    }
+
+    // 初期起動
+    window.onload = function() {
+        init();
+        loadLeaderboard('easy');
+        loadLeaderboard('normal');
+        loadLeaderboard('hard');
+    };
+
+    // 難易度変更処理
+    function selectDifficulty(diff) {
+        currentDifficulty = diff;
+        const easyBtn = document.getElementById('diff-easy-btn');
+        const normalBtn = document.getElementById('diff-normal-btn');
+        const hardBtn = document.getElementById('diff-hard-btn');
+
+        if (easyBtn) easyBtn.className = 'diff-btn';
+        if (normalBtn) normalBtn.className = 'diff-btn';
+        if (hardBtn) hardBtn.className = 'diff-btn';
+
+        if (diff === 'easy' && easyBtn) {
+            easyBtn.classList.add('selected-easy');
+        } else if (diff === 'normal' && normalBtn) {
+            normalBtn.classList.add('selected-normal');
+        } else if (diff === 'hard' && hardBtn) {
+            hardBtn.classList.add('selected-hard');
+        }
+    }
+
+    // タイトル画面からキャラ選択へ
+    function openCharSelectFromTitle() {
+        const title = document.getElementById('title-screen');
+        const charSelect = document.getElementById('char-select-screen');
+        
+        if (title) title.style.opacity = '0';
+        setTimeout(() => {
+            if (title) title.style.display = 'none';
+            if (charSelect) {
+                charSelect.style.display = 'flex';
+                charSelect.style.opacity = '0';
+                charSelect.style.transition = 'opacity 0.5s';
+                setTimeout(() => charSelect.style.opacity = '1', 50);
+            }
+        }, 600);
+    }
+
+    // キャラ選択からタイトル画面に戻る
+    function backToTitleFromChar() {
+        const title = document.getElementById('title-screen');
+        const charSelect = document.getElementById('char-select-screen');
+        
+        if (charSelect) charSelect.style.opacity = '0';
+        setTimeout(() => {
+            if (charSelect) charSelect.style.display = 'none';
+            if (title) {
+                title.style.display = 'flex';
+                title.style.opacity = '0';
+                title.style.transition = 'opacity 0.5s';
+                setTimeout(() => title.style.opacity = '1', 50);
+            }
+        }, 400);
+    }
+
+    // 説明ページを開く
+    function openHowToPlay() {
+        document.getElementById('char-select-screen').style.display = 'none';
+        document.getElementById('how-to-screen').style.display = 'flex';
+    }
+
+    // 説明ページを閉じる
+    function closeHowToPlay() {
+        document.getElementById('how-to-screen').style.display = 'none';
+        document.getElementById('char-select-screen').style.display = 'flex';
+    }
+
+    // 耐久モード：時間選択パネルの展開
+    function showSurvivalTimeSelect() {
+        document.getElementById('main-char-select-btns').style.display = 'none';
+        document.getElementById('survival-time-select').style.display = 'flex';
+    }
+
+    // 耐久モード：時間選択のキャンセル
+    function hideSurvivalTimeSelect() {
+        document.getElementById('survival-time-select').style.display = 'none';
+        document.getElementById('main-char-select-btns').style.display = 'flex';
+    }
+
+    // 耐久モードでゲームを開始する
+    function startSurvivalGame(seconds) {
+        isSurvivalMode = true;
+        survivalTimeLimit = seconds;
+        survivalTimer = parseFloat(seconds);
+        hideSurvivalTimeSelect();
+        startGame();
+    }
+
+    function selectCharacter(type, element) {
+        currentSelectedType = type;
+        const cards = document.querySelectorAll('.char-card');
+        cards.forEach(card => card.classList.remove('selected'));
+        element.classList.add('selected');
+    }
+
+    function selectSubWeapon(type, element) {
+        if (!SUB_WEAPON_PRESETS[type]) return;
+        currentSelectedSubWeapon = type;
+        const cards = document.querySelectorAll('.subweapon-card');
+        cards.forEach(card => card.classList.remove('selected'));
+        element.classList.add('selected');
+        updateSubWeaponUI();
+    }
+
+    function openCharSelect() {
+        clearInterval(spawnInterval);
+        clearInterval(itemSpawnInterval);
+        document.getElementById('game-over').style.display = 'none';
+        document.getElementById('mission-clear').style.display = 'none';
+        document.getElementById('hud').style.display = 'none';
+        document.getElementById('controls-layout').style.display = 'none';
+        document.getElementById('instructions').style.display = 'none';
+        document.getElementById('pause-btn').style.display = 'none';
+        document.getElementById('pause-menu').style.display = 'none';
+        document.getElementById('leaderboard-modal').style.display = 'none';
+        
+        document.getElementById('title-screen').style.display = 'none';
+        const charSelect = document.getElementById('char-select-screen');
+        charSelect.style.display = 'flex';
+        charSelect.style.opacity = '1';
+        
+        isGameStarted = false;
+        isGameOver = false;
+        isPaused = false;
+        isSurvivalMode = false;
+
+        if (player) {
+            scene.remove(player);
+            player = null;
+        }
+
+        camera.position.set(0, 15, 18);
+        camera.lookAt(0, 0, -2);
+    }
+
+    // ゲーム開始リセット（初期化処理）
+    function resetGame() {
+        playerHP = 100;
+        score = 0;
+        isGameOver = false;
+        isPaused = false;
+        shootCooldown = 0;
+
+        if (isSurvivalMode) {
+            survivalTimer = parseFloat(survivalTimeLimit);
+        }
+
+        const scoreText = document.getElementById('score-text');
+        if (scoreText) scoreText.innerText = score;
+        
+        const hpBar = document.getElementById('hp-bar');
+        if (hpBar) hpBar.style.width = '100%';
+        
+        const gameOverDiv = document.getElementById('game-over');
+        if (gameOverDiv) gameOverDiv.style.display = 'none';
+        
+        const missionClearDiv = document.getElementById('mission-clear');
+        if (missionClearDiv) missionClearDiv.style.display = 'none';
+        
+        const pauseMenuDiv = document.getElementById('pause-menu');
+        if (pauseMenuDiv) pauseMenuDiv.style.display = 'none';
+        
+        const rankInDiv = document.getElementById('rank-in-container');
+        if (rankInDiv) rankInDiv.style.display = 'none';
+
+        invincibleTimer = 0;
+        multishotTimer = 0;
+        rapidfireTimer = 0;
+        shieldStrength = 0;
+        subWeaponCooldown = 0;
+        shieldGauge = 100;
+        shieldOverheatTimer = 0;
+        isSubShieldActive = false;
+        keys['Space'] = false;
+
+        bullets.forEach(b => { if (b && b.mesh) scene.remove(b.mesh); });
+        enemies.forEach(e => { if (e && e.mesh) scene.remove(e.mesh); });
+        items.forEach(i => { if (i && i.mesh) scene.remove(i.mesh); });
+        particles.forEach(p => { if (p && p.mesh) scene.remove(p.mesh); });
+
+        bullets = [];
+        enemies = [];
+        items = [];
+        particles = [];
+
+        if (player) {
+            player.position.set(0, 0, 8);
+            player.rotation.set(0, 0, 0);
+        }
+
+        updateSubWeaponUI();
+    }
+
+    // 3Dシーン初期化
+    function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020208);
+        scene.fog = new THREE.FogExp2(0x020208, 0.02);
+
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 15, 18);
+        camera.lookAt(0, 0, -2);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        
+        const container = document.getElementById('canvas-container');
+        if (container) container.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.25);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0x00ffff, 0.9);
+        dirLight.position.set(20, 45, 20);
+        scene.add(dirLight);
+
+        const pointLight = new THREE.PointLight(0xff0055, 1.2, 60);
+        pointLight.position.set(-15, 10, -10);
+        scene.add(pointLight);
+
+        gridHelper = new THREE.GridHelper(240, 120, 0x00ffff, 0x112244);
+        gridHelper.position.y = -0.5;
+        scene.add(gridHelper);
+
+        window.addEventListener('keydown', (e) => { 
+            if (e.code === 'Space' && isGameStarted && !isGameOver) {
+                e.preventDefault();
+            }
+            keys[e.code] = true; 
+            if (e.code === 'Space' && !e.repeat && currentSelectedSubWeapon !== 'shield') {
+                activateSubWeapon();
+            }
+            if (e.code === 'KeyP' || e.code === 'Escape') {
+                togglePause();
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+            if (e.code === 'Space') isSubShieldActive = false;
+        });
+        
+        window.addEventListener('mousedown', (e) => {
+            if (!isGameStarted || isGameOver || e.button !== 0 || isPaused) return;
+            if (e.clientY > window.innerHeight - 180) return; 
+            isMousePressing = true;
+        });
+        window.addEventListener('mouseup', () => { isMousePressing = false; });
+
+        window.addEventListener('blur', () => {
+            keys = {};
+            isMousePressing = false;
+            isSubShieldActive = false;
+            joystickActive = false;
+            if (knob) {
+                knob.style.transform = 'translate(0px, 0px)';
+            }
+            moveDirection.set(0, 0, 0);
+        });
+
+        joystick = document.getElementById('joystick-container');
+        knob = document.getElementById('joystick-knob');
+
+        if (joystick && knob) {
+            joystick.addEventListener('touchstart', onJoystickStart, { passive: false });
+            window.addEventListener('touchmove', onJoystickMove, { passive: false });
+            window.addEventListener('touchend', onJoystickEnd, { passive: false });
+            window.addEventListener('touchcancel', onJoystickEnd, { passive: false });
+        }
+
+        window.addEventListener('resize', onWindowResize);
+
+        animate();
+    }
+
+    // ウィンドウリサイズ時のアスペクト比調整
+    function onWindowResize() {
+        if (camera && renderer) {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    }
+
+    // ジョイスティック制御
+    function onJoystickStart(e) {
+        if (!isGameStarted || isGameOver || isPaused) return;
+        e.preventDefault();
+        joystickActive = true;
+        const rect = joystick.getBoundingClientRect();
+        joystickStart.set(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    }
+
+    function onJoystickMove(e) {
+        if (!joystickActive || isPaused || isGameOver || !isGameStarted) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        const deltaX = touch.clientX - joystickStart.x;
+        const deltaY = touch.clientY - joystickStart.y;
+        const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+        const maxDistance = 45;
+
+        let angle = Math.atan2(deltaY, deltaX);
+        let moveX = deltaX;
+        let moveY = deltaY;
+
+        if (distance > maxDistance) {
+            moveX = Math.cos(angle) * maxDistance;
+            moveY = Math.sin(angle) * maxDistance;
+        }
+
+        if (knob) {
+            knob.style.transform = `translate(${moveX}px, ${moveY}px)`;
+        }
+
+        moveDirection.set(moveX / maxDistance, 0, moveY / maxDistance);
+    }
+
+    function onJoystickEnd(e) {
+        joystickActive = false;
+        if (knob) {
+            knob.style.transform = 'translate(0px, 0px)';
+        }
+        moveDirection.set(0, 0, 0);
+    }
+
+    // 自機（3Dモデル）のビルド (元の美しいネオンパルスデザインに完全復元)
+    function createPlayerShip(type) {
+        const config = FIGHTER_PRESETS[type] || FIGHTER_PRESETS.cobalt;
+        activeFighterConfig = config;
+
+        player = new THREE.Group();
+
+        // コックピット（機体色ネオン：BoxGeometry）
+        const cockpitGeo = new THREE.BoxGeometry(0.6, 0.5, 1.4);
+        const cockpitMat = new THREE.MeshStandardMaterial({ 
+            color: config.color, 
+            roughness: 0.1, 
+            metalness: 0.8,
+            emissive: config.color,
+            emissiveIntensity: 0.4
+        });
+        playerCockpit = new THREE.Mesh(cockpitGeo, cockpitMat);
+        playerCockpit.position.set(0, 0.25, -0.3);
+        player.add(playerCockpit);
+
+        // 左右ウイング（鋭いコーンウイング：ConeGeometry 0.35, 1.6, 4）
+        const wingGeo = new THREE.ConeGeometry(0.35, 1.6, 4);
+        const wingMat = new THREE.MeshStandardMaterial({ 
+            color: config.color, 
+            roughness: 0.3,
+            metalness: 0.6,
+            emissive: config.color,
+            emissiveIntensity: 0.2
+        });
+        
+        playerLeftWing = new THREE.Mesh(wingGeo, wingMat);
+        playerLeftWing.rotation.z = Math.PI / 2.3;
+        playerLeftWing.rotation.y = Math.PI / 5;
+        playerLeftWing.position.set(-0.95, 0.1, 0.1);
+        player.add(playerLeftWing);
+
+        playerRightWing = new THREE.Mesh(wingGeo, wingMat);
+        playerRightWing.rotation.z = -Math.PI / 2.3;
+        playerRightWing.rotation.y = -Math.PI / 5;
+        playerRightWing.position.set(0.95, 0.1, 0.1);
+        player.add(playerRightWing);
+
+        // 後部スラスターネオン
+        const thrusterGeo = new THREE.ConeGeometry(0.25, 0.7, 8);
+        const thrusterMat = new THREE.MeshBasicMaterial({ color: 0xff0055 });
+        playerThruster = new THREE.Mesh(thrusterGeo, thrusterMat);
+        playerThruster.rotation.x = Math.PI / 2;
+        playerThruster.position.set(0, 0.1, 0.7);
+        player.add(playerThruster);
+
+        // 補助シールドバリアの枠
+        const barrierGeo = new THREE.SphereGeometry(1.5, 16, 16);
+        const barrierMat = new THREE.MeshBasicMaterial({
+            color: 0x00ffff,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.0
+        });
+        barrierVisual = new THREE.Mesh(barrierGeo, barrierMat);
+        player.add(barrierVisual);
+
+        // Space長押しで展開するサブウェポン・シールド
+        const subShieldGeo = new THREE.SphereGeometry(2.15, 24, 24);
+        const subShieldMat = new THREE.MeshBasicMaterial({
+            color: 0x00ffcc,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.0
+        });
+        subShieldVisual = new THREE.Mesh(subShieldGeo, subShieldMat);
+        player.add(subShieldVisual);
+
+        // 無敵バリアの枠
+        const invincibleGeo = new THREE.SphereGeometry(2.0, 24, 24);
+        const invincibleMat = new THREE.MeshBasicMaterial({
+            color: 0xffd700,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.0
+        });
+        invincibleBarrierVisual = new THREE.Mesh(invincibleGeo, invincibleMat);
+        player.add(invincibleBarrierVisual);
+
+        player.position.set(0, 0, 8);
+        scene.add(player);
+    }
+
+    // ショット発射 (レーザーパルス CylinderGeometry に完全復元 ＋ 視認性向上のための少し大きなサイズ調整)
+    function createBullet(pos, vel, color, life, scale = 1.0, isEnemy = false, damage = 1) {
+        let bMesh;
+
+        if (isEnemy) {
+            // 敵の弾（SphereGeometry + 外側発光、こちらも少し大きく見えやすく）
+            const bGeo = new THREE.SphereGeometry(0.55, 8, 8);
+            const bMat = new THREE.MeshBasicMaterial({ 
+                color: 0xff0000,
+                transparent: true,
+                opacity: 0.9
+            });
+            bMesh = new THREE.Mesh(bGeo, bMat);
+
+            const glowGeo = new THREE.SphereGeometry(0.85, 8, 8);
+            const glowMat = new THREE.MeshBasicMaterial({
+                color: 0xff3333,
+                transparent: true,
+                opacity: 0.35,
+                wireframe: true
+            });
+            const glow = new THREE.Mesh(glowGeo, glowMat);
+            bMesh.add(glow);
+        } else {
+            // 自機の弾 (CylinderGeometry に完全復元 ＆ 前より少し大きめの迫力サイズ)
+            const width = 0.22 * scale;
+            const length = 1.8 * scale;
+            const bGeo = new THREE.CylinderGeometry(width, width, length, 5);
+            
+            const bMat = new THREE.MeshBasicMaterial({ 
+                color: color,
+                transparent: true,
+                opacity: 0.95
+            });
+            bMesh = new THREE.Mesh(bGeo, bMat);
+            bMesh.rotation.x = Math.PI / 2; // 進行方向に寝かせる
+
+            const outerGeo = new THREE.CylinderGeometry(width * 1.8, width * 1.8, length, 4);
+            const outerMat = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.3,
+                wireframe: true
+            });
+            const outer = new THREE.Mesh(outerGeo, outerMat);
+            bMesh.add(outer);
+        }
+
+        bMesh.position.copy(pos);
+        scene.add(bMesh);
+
+        bullets.push({
+            mesh: bMesh,
+            velocity: vel,
+            life: life,
+            isEnemy: isEnemy,
+            damage: damage,
+            kind: isEnemy ? 'enemy' : 'main',
+            color: isEnemy ? 0xff0000 : color,
+            collisionRadius: isEnemy ? 0.4 : 0.3
+        });
+    }
+
+    // 武器展開システム（オート射撃時）
+    function fireWeapons() {
+        if (shootCooldown > 0) return;
+
+        const isRapid = rapidfireTimer > 0;
+        const cooldownVal = isRapid ? activeFighterConfig.rapidCooldown : activeFighterConfig.baseCooldown;
+        shootCooldown = cooldownVal;
+
+        const pos = player.position.clone();
+        pos.z -= 1.3;
+
+        const isMulti = multishotTimer > 0;
+        const isVortex = currentSelectedType === 'vortex';
+        const isGaia = currentSelectedType === 'gaia';
+
+        // 1. 通常 or 連射の直進弾
+        if (currentSelectedType === 'cobalt' || currentSelectedType === 'redline' || currentSelectedType === 'horizon') {
+            createBullet(pos, new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
+            
+            if (isMulti) {
+                // マルチショット発火時は左右追加
+                createBullet(pos, new THREE.Vector3(-0.25, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
+                createBullet(pos, new THREE.Vector3(0.25, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
+            }
+        }
+        // 2. W字型ワイド攻撃（Vortex専用）
+        else if (isVortex) {
+            createBullet(pos.clone().add(new THREE.Vector3(-0.4, 0, 0)), new THREE.Vector3(-0.15, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
+            createBullet(pos.clone().add(new THREE.Vector3(0.4, 0, 0)), new THREE.Vector3(0.15, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
+            
+            if (isMulti) {
+                // マルチショット発火時はさらに前方中央に超高速直撃弾をプラス
+                createBullet(pos, new THREE.Vector3(0, 0, -0.72), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 1.2, false, activeFighterConfig.damage);
+            }
+        }
+        // 3. T字型3方向拡散（Gaia専用）
+        else if (isGaia) {
+            createBullet(pos, new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
+            createBullet(pos, new THREE.Vector3(-0.62, 0, 0), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
+            createBullet(pos, new THREE.Vector3(0.62, 0, 0), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
+
+            if (isMulti) {
+                // マルチショット時は直進弾が2連射になる
+                createBullet(pos.clone().add(new THREE.Vector3(-0.15, 0, -0.2)), new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
+                createBullet(pos.clone().add(new THREE.Vector3(0.15, 0, -0.2)), new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
+            }
+        }
+    }
+
+    function getMissileTargets() {
+        if (!player) return [];
+        return enemies
+            .filter(enemy => enemy && enemy.mesh && enemy.mesh.position.z < player.position.z + 6)
+            .slice()
+            .sort((a, b) => player.position.distanceTo(a.mesh.position) - player.position.distanceTo(b.mesh.position));
+    }
+
+    function createHomingMissile(startPos, initialVelocity, target) {
+        const group = new THREE.Group();
+        const bodyMat = new THREE.MeshStandardMaterial({
+            color: 0xff33cc,
+            emissive: 0xff0088,
+            emissiveIntensity: 0.8,
+            metalness: 0.75,
+            roughness: 0.15
+        });
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.22, 1.15, 8), bodyMat);
+        body.rotation.x = -Math.PI / 2;
+        group.add(body);
+
+        const nose = new THREE.Mesh(
+            new THREE.ConeGeometry(0.22, 0.5, 8),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        nose.rotation.x = -Math.PI / 2;
+        nose.position.z = -0.78;
+        group.add(nose);
+
+        const glow = new THREE.Mesh(
+            new THREE.SphereGeometry(0.28, 8, 8),
+            new THREE.MeshBasicMaterial({ color: 0xff33cc, transparent: true, opacity: 0.5 })
+        );
+        glow.position.z = 0.62;
+        group.add(glow);
+
+        group.position.copy(startPos);
+        scene.add(group);
+        bullets.push({
+            mesh: group,
+            velocity: initialVelocity,
+            life: 300,
+            isEnemy: false,
+            damage: SUB_WEAPON_PRESETS.missile.damage,
+            kind: 'missile',
+            color: SUB_WEAPON_PRESETS.missile.color,
+            collisionRadius: 0.75,
+            target: target,
+            turnRate: 0.085
+        });
+    }
+
+    function fireMultiMissiles() {
+        const targets = getMissileTargets();
+        const offsets = [-1.2, -0.6, 0, 0.6, 1.2];
+        offsets.forEach((offset, index) => {
+            const start = player.position.clone().add(new THREE.Vector3(offset, 0.15, -0.4 - Math.abs(offset) * 0.15));
+            const velocity = new THREE.Vector3(offset * 0.045, 0, -0.42).normalize().multiplyScalar(0.42);
+            const target = targets.length ? targets[index % targets.length] : null;
+            createHomingMissile(start, velocity, target);
+        });
+        showNotification('MULTI MISSILE — TARGET LOCK', '#ff33cc');
+    }
+
+    function fireNovaBeam() {
+        const beamLength = 34;
+        const beamWidth = 1.8;
+        const beamGroup = new THREE.Group();
+        const beamMat = new THREE.MeshBasicMaterial({
+            color: 0x66e0ff,
+            transparent: true,
+            opacity: 0.82
+        });
+        const core = new THREE.Mesh(new THREE.BoxGeometry(beamWidth, 0.3, beamLength), beamMat);
+        beamGroup.add(core);
+
+        const outer = new THREE.Mesh(
+            new THREE.BoxGeometry(beamWidth * 1.55, 0.55, beamLength),
+            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, wireframe: true })
+        );
+        beamGroup.add(outer);
+
+        const startZ = player.position.z - 1.2;
+        const endZ = startZ - beamLength;
+        beamGroup.position.set(player.position.x, 0.15, (startZ + endZ) / 2);
+        scene.add(beamGroup);
+        bullets.push({
+            mesh: beamGroup,
+            velocity: new THREE.Vector3(),
+            life: 18,
+            isEnemy: false,
+            damage: SUB_WEAPON_PRESETS.beam.damage,
+            kind: 'beam',
+            color: SUB_WEAPON_PRESETS.beam.color,
+            collisionRadius: beamWidth / 2,
+            beamX: player.position.x,
+            beamStartZ: startZ,
+            beamEndZ: endZ,
+            hitEnemies: new Set()
+        });
+        showNotification('NOVA BEAM — FULL OUTPUT', '#66e0ff');
+    }
+
+    function activateSubWeapon() {
+        if (!isGameStarted || isGameOver || isPaused || !player) return;
+        if (currentSelectedSubWeapon === 'shield' || subWeaponCooldown > 0) return;
+
+        const config = SUB_WEAPON_PRESETS[currentSelectedSubWeapon];
+        if (currentSelectedSubWeapon === 'missile') {
+            fireMultiMissiles();
+        } else if (currentSelectedSubWeapon === 'beam') {
+            fireNovaBeam();
+        }
+        subWeaponCooldown = config.cooldown;
+        updateSubWeaponUI();
+    }
+
+    function triggerShieldOverheat() {
+        if (shieldOverheatTimer > 0) return;
+        shieldGauge = 0;
+        shieldOverheatTimer = SUB_WEAPON_PRESETS.shield.lockout;
+        isSubShieldActive = false;
+        showNotification('SHIELD OVERHEAT — 4.0s LOCKOUT', '#ff3366');
+    }
+
+    function drainSubShield(amount) {
+        if (shieldOverheatTimer > 0) return;
+        shieldGauge = Math.max(0, shieldGauge - amount);
+        if (shieldGauge <= 0) triggerShieldOverheat();
+    }
+
+    function updateSubWeaponState() {
+        if (subWeaponCooldown > 0) subWeaponCooldown--;
+
+        if (currentSelectedSubWeapon === 'shield') {
+            if (shieldOverheatTimer > 0) {
+                shieldOverheatTimer--;
+                isSubShieldActive = false;
+                if (shieldOverheatTimer === 0) {
+                    shieldGauge = 100;
+                    showNotification('SHIELD RECHARGED', '#00ffcc');
+                }
+            } else if (keys['Space']) {
+                isSubShieldActive = shieldGauge > 0;
+                if (isSubShieldActive) {
+                    drainSubShield(SUB_WEAPON_PRESETS.shield.drainPerFrame);
+                }
+            } else {
+                isSubShieldActive = false;
+                shieldGauge = Math.min(100, shieldGauge + SUB_WEAPON_PRESETS.shield.rechargePerFrame);
+            }
+        } else {
+            isSubShieldActive = false;
+        }
+
+        if (subShieldVisual) {
+            subShieldVisual.material.opacity = isSubShieldActive
+                ? 0.34 + Math.sin(Date.now() * 0.018) * 0.12
+                : 0.0;
+            subShieldVisual.rotation.y += isSubShieldActive ? 0.045 : 0.01;
+            subShieldVisual.rotation.z -= isSubShieldActive ? 0.025 : 0.005;
+        }
+
+        updateSubWeaponUI();
+    }
+
+    function updateSubWeaponUI() {
+        const config = SUB_WEAPON_PRESETS[currentSelectedSubWeapon];
+        const nameEl = document.getElementById('subweapon-name');
+        const fillEl = document.getElementById('subweapon-gauge-fill');
+        const statusEl = document.getElementById('subweapon-status');
+        if (!config || !nameEl || !fillEl || !statusEl) return;
+
+        nameEl.innerText = config.name;
+        const colorHex = '#' + config.color.toString(16).padStart(6, '0');
+        fillEl.style.background = `linear-gradient(90deg, ${colorHex}, #ffffff)`;
+        fillEl.style.boxShadow = `0 0 8px ${colorHex}`;
+
+        if (currentSelectedSubWeapon === 'shield') {
+            fillEl.style.width = `${shieldGauge}%`;
+            if (shieldOverheatTimer > 0) {
+                statusEl.innerText = `OVERHEAT ${(shieldOverheatTimer / 60).toFixed(1)}s`;
+                statusEl.style.color = '#ff3366';
+            } else if (isSubShieldActive) {
+                statusEl.innerText = `ACTIVE ${Math.ceil(shieldGauge)}%`;
+                statusEl.style.color = colorHex;
+            } else {
+                statusEl.innerText = `HOLD SPACE — ${Math.ceil(shieldGauge)}%`;
+                statusEl.style.color = '#ffffff';
+            }
+        } else {
+            const readyRatio = Math.max(0, 1 - subWeaponCooldown / config.cooldown);
+            fillEl.style.width = `${readyRatio * 100}%`;
+            if (subWeaponCooldown > 0) {
+                statusEl.innerText = `RECHARGING ${(subWeaponCooldown / 60).toFixed(1)}s`;
+                statusEl.style.color = '#aaaaaa';
+            } else {
+                statusEl.innerText = 'READY — PRESS SPACE';
+                statusEl.style.color = '#ffffff';
+            }
+        }
+    }
+
+    // 被弾処理 (被弾時のカメラ揺れシェイクを完全に排除)
+    function takeDamage(amount) {
+        if (isGameOver || !isGameStarted || isPaused) return;
+
+        // 選択式シールドはSpace長押し中のみダメージを完全吸収する
+        if (currentSelectedSubWeapon === 'shield' && isSubShieldActive && shieldOverheatTimer <= 0) {
+            drainSubShield(9);
+            showNotification(`HOLD SHIELD BLOCK — ${Math.ceil(shieldGauge)}%`, '#00ffcc');
+            return;
+        }
+
+        // 無敵時は一切ダメージを受けない
+        if (invincibleTimer > 0) return;
+
+        // 1. バリア耐久値の消費
+        if (shieldStrength > 0) {
+            shieldStrength--;
+            showNotification(`BARRIER ABSORBED (STOCK: ${shieldStrength})`, "#00ffff");
+            return;
+        }
+
+        // 2. 自機HP減少
+        playerHP = Math.max(0, playerHP - amount);
+        
+        const hpBar = document.getElementById('hp-bar');
+        if (hpBar) hpBar.style.width = playerHP + '%';
+
+        // ★被弾時のカメラ揺れ（カメラシェイク）の記述を完全に廃止しました★
+
+        if (playerHP <= 0) {
+            triggerGameOver();
+        }
+    }
+
+    // ゲームオーバー移行
+    function triggerGameOver() {
+        isGameOver = true;
+        clearInterval(spawnInterval);
+        clearInterval(itemSpawnInterval);
+
+        createExplosion(player.position, 0xff0055, 45);
+        scene.remove(player);
+
+        document.getElementById('pause-btn').style.display = 'none';
+        document.getElementById('final-score-text').innerText = score.toLocaleString();
+        document.getElementById('game-over').style.display = 'block';
+
+        // ランキング判定とお名前入力UIの活性化
+        if (checkLeaderboardEligibility(currentDifficulty, score)) {
+            document.getElementById('rank-in-container').style.display = 'block';
+            document.getElementById('player-name-input').value = '';
+            document.getElementById('player-name-input').focus();
+        } else {
+            document.getElementById('rank-in-container').style.display = 'none';
+        }
+    }
+
+    // 耐久成功クリア
+    function triggerMissionClear() {
+        isGameOver = true;
+        clearInterval(spawnInterval);
+        clearInterval(itemSpawnInterval);
+
+        // クリアを画面上でお祝い
+        showNotification("MISSION SUCCESS!", "#ffd700");
+        document.getElementById('pause-btn').style.display = 'none';
+
+        const clearInfo = document.getElementById('clear-info');
+        if (clearInfo) {
+            clearInfo.innerHTML = `SURVIVED ${survivalTimeLimit} SECONDS!<br><span style="font-size:12px;color:#aaa;">Difficulty: ${currentDifficulty.toUpperCase()}</span>`;
+        }
+
+        document.getElementById('mission-clear').style.display = 'block';
+    }
+
+    // ゲーム開始処理
+    function startGame() {
+        clearInterval(spawnInterval);
+        clearInterval(itemSpawnInterval);
+        document.getElementById('char-select-screen').style.display = 'none';
+        document.getElementById('hud').style.display = 'block';
+        document.getElementById('controls-layout').style.display = 'flex';
+        document.getElementById('instructions').style.display = 'block';
+        
+        // ポーズ・HUDボタン
+        document.getElementById('pause-btn').style.display = 'block';
+
+        // 耐久モードに応じたHUDタイマーの表示切り替え
+        const timerHud = document.getElementById('survival-hud-timer');
+        const scoreHud = document.getElementById('standard-score-hud');
+        if (isSurvivalMode) {
+            if (timerHud) timerHud.style.display = 'block';
+            if (scoreHud) scoreHud.style.display = 'none';
+        } else {
+            if (timerHud) timerHud.style.display = 'none';
+            if (scoreHud) scoreHud.style.display = 'block';
+        }
+
+        resetGame();
+        createPlayerShip(currentSelectedType);
+
+        isGameStarted = true;
+
+        // 生成サイクル調整
+        let spawnRate = 750;
+        let itemRate = 6000;
+        
+        if (currentDifficulty === 'easy') {
+            spawnRate = 1200;
+            itemRate = 5000; // イージーはアイテム多め
+        } else if (currentDifficulty === 'hard') {
+            spawnRate = 480;
+            itemRate = 9000; // ハードは厳しめ
+        }
+
+        spawnInterval = setInterval(spawnEnemy, spawnRate);
+        itemSpawnInterval = setInterval(() => spawnItem(), itemRate);
+    }
+
+    // 直接リトライ
+    function retryDirectly() {
+        startGame();
+    }
+
+    // 一時停止（ポーズ）の切り替え
+    function togglePause() {
+        if (!isGameStarted || isGameOver) return;
+        
+        isPaused = !isPaused;
+        const pauseMenu = document.getElementById('pause-menu');
+        
+        if (isPaused) {
+            pauseMenu.style.display = 'block';
+            document.getElementById('pause-btn').innerText = 'RESUME';
+        } else {
+            pauseMenu.style.display = 'none';
+            document.getElementById('pause-btn').innerText = 'PAUSE';
+        }
+    }
+
+    // ポーズ画面からの遷移処理
+    function goToCharSelectFromPause() {
+        togglePause(); // ポーズを一旦戻す
+        openCharSelect();
+    }
+
+    function goToTitleFromPause() {
+        togglePause();
+        openCharSelect();
+        backToTitleFromChar();
+    }
+
+    // 敵出現ロジック
+    function spawnEnemy() {
+        if (!isGameStarted || isGameOver || isPaused) return;
+
+        // 🌟サバイバルモード（耐久ミッション）の場合、敵の発生頻度を半分に制限して、精密な回避活動に専念しやすくします
+        if (isSurvivalMode && Math.random() < 0.5) return;
+
+        let eliteChance = 0.22;
+        if (currentDifficulty === 'easy') eliteChance = 0.12;
+        if (currentDifficulty === 'hard') eliteChance = 0.32;
+
+        const isElite = Math.random() < eliteChance;
+        const enemyMesh = new THREE.Group();
+
+        let coreGeo, mat;
+        
+        let maxHp = isElite ? 3 : 1;
+        if (currentDifficulty === 'hard') {
+            maxHp = isElite ? 5 : 2;
+        } else if (currentDifficulty === 'easy') {
+            maxHp = isElite ? 2 : 1;
+        }
+
+        let speedMultiplier = 1.0;
+        if (currentDifficulty === 'easy') speedMultiplier = 0.65;
+        if (currentDifficulty === 'hard') speedMultiplier = 1.45;
+
+        let speed = isElite ? 0.06 : 0.09 + Math.random() * 0.05;
+        speed *= speedMultiplier;
+
+        if (isElite) {
+            coreGeo = new THREE.OctahedronGeometry(1.2, 0);
+            mat = new THREE.MeshStandardMaterial({
+                color: 0xff0055,
+                roughness: 0.2,
+                emissive: 0xff0055,
+                emissiveIntensity: 0.7
+            });
+            const core = new THREE.Mesh(coreGeo, mat);
+            enemyMesh.add(core);
+
+            const ringGeo = new THREE.TorusGeometry(1.6, 0.15, 8, 24);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0xff5500 });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2;
+            enemyMesh.add(ring);
+        } else {
+            coreGeo = new THREE.ConeGeometry(0.7, 1.4, 4);
+            mat = new THREE.MeshStandardMaterial({
+                color: 0xffaa00,
+                roughness: 0.2,
+                emissive: 0xffaa00,
+                emissiveIntensity: 0.5
+            });
+            const core = new THREE.Mesh(coreGeo, mat);
+            core.rotation.x = Math.PI / 2;
+            enemyMesh.add(core);
+        }
+
+        const spawnOriginX = player ? player.position.x : 0;
+        const spawnOriginZ = player ? player.position.z : 8;
+        enemyMesh.position.set(
+            spawnOriginX + (Math.random() - 0.5) * 42,
+            0,
+            spawnOriginZ - 43
+        );
+
+        scene.add(enemyMesh);
+        enemies.push({
+            mesh: enemyMesh,
+            isElite: isElite,
+            hp: maxHp,
+            maxHp: maxHp,
+            speed: speed,
+            shootTimer: isElite ? Math.random() * 60 : 0
+        });
+    }
+
+    // 回復・パワーアップアイテム出現
+    function spawnItem(presetPos = null, forcedType = null) {
+        if (!isGameStarted || isGameOver || isPaused) return;
+
+        const types = ['shield', 'rapidfire', 'multishot', 'invincible'];
+        const chosenType = forcedType || types[Math.floor(Math.random() * types.length)];
+
+        let color = 0xffffff;
+        if (chosenType === 'shield') color = 0x00ffff;
+        if (chosenType === 'rapidfire') color = 0xff5500;
+        if (chosenType === 'multishot') color = 0xff00ff;
+        if (chosenType === 'repair') color = 0x00ff55;
+        if (chosenType === 'invincible') color = 0xffd700;
+
+        const group = new THREE.Group();
+
+        const geo = new THREE.IcosahedronGeometry(0.7, 0);
+        const mat = new THREE.MeshStandardMaterial({
+            color: color,
+            roughness: 0.1,
+            metalness: 0.9,
+            emissive: color,
+            emissiveIntensity: 0.8
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        group.add(mesh);
+
+        const frameGeo = new THREE.BoxGeometry(1.3, 1.3, 1.3);
+        const frameMat = new THREE.MeshBasicMaterial({
+            color: color,
+            wireframe: true
+        });
+        const frame = new THREE.Mesh(frameGeo, frameMat);
+        group.add(frame);
+
+        if (presetPos) {
+            group.position.copy(presetPos);
+        } else {
+            const spawnOriginX = player ? player.position.x : 0;
+            const spawnOriginZ = player ? player.position.z : 8;
+            group.position.set(
+                spawnOriginX + (Math.random() - 0.5) * 36,
+                0.5,
+                spawnOriginZ - 43
+            );
+        }
+
+        scene.add(group);
+        items.push({
+            mesh: group,
+            type: chosenType,
+            color: color,
+            speed: presetPos ? 0.05 : 0.12
+        });
+    }
+
+    // 撃破パーティクル
+    function createExplosion(pos, color, count = 12) {
+        for (let i = 0; i < count; i++) {
+            const size = 0.15 + Math.random() * 0.2;
+            const geo = new THREE.BoxGeometry(size, size, size);
+            const mat = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 1.0
+            });
+            const pMesh = new THREE.Mesh(geo, mat);
+            pMesh.position.copy(pos);
+
+            const velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * 0.4,
+                (Math.random() - 0.5) * 0.2,
+                (Math.random() - 0.5) * 0.4
+            );
+
+            scene.add(pMesh);
+            particles.push({
+                mesh: pMesh,
+                velocity: velocity,
+                life: 35 + Math.floor(Math.random() * 15)
+            });
+        }
+    }
+
+    function damageEnemy(enemy, enemyIndex, baseDamage, impactPos, color, sourceKind) {
+        let damage = baseDamage;
+        if (sourceKind === 'main' && currentSelectedType === 'horizon' && enemy.isElite) {
+            damage *= 2.0;
+        }
+
+        createExplosion(impactPos, color, sourceKind === 'beam' ? 10 : 5);
+        enemy.hp -= damage;
+        enemy.mesh.position.z -= sourceKind === 'beam' ? 0.55 : 0.25;
+
+        if (enemy.hp > 0) return;
+
+        createExplosion(
+            enemy.mesh.position,
+            enemy.isElite ? 0xff0055 : 0xffaa00,
+            enemy.isElite ? 25 : 12
+        );
+
+        if (enemy.isElite && Math.random() < 0.35) {
+            spawnItem(enemy.mesh.position.clone(), 'repair');
+        }
+
+        score += enemy.isElite ? 250 : 100;
+        const scoreText = document.getElementById('score-text');
+        if (scoreText) scoreText.innerText = score.toLocaleString();
+
+        scene.remove(enemy.mesh);
+        enemies.splice(enemyIndex, 1);
+    }
+
+    // 当たり判定・衝突処理
+    function handleCollisions() {
+        if (isGameOver || !isGameStarted) return;
+
+        const playerRadius = 1.1;
+
+        // 1. プレイヤー vs アイテム
+        for (let i = items.length - 1; i >= 0; i--) {
+            const item = items[i];
+            if (!item || !item.mesh) continue;
+            const dist = player.position.distanceTo(item.mesh.position);
+            if (dist < 3.5) {
+                applyPowerup(item.type);
+                createExplosion(item.mesh.position, item.color, 15);
+                scene.remove(item.mesh);
+                
+                item.mesh.traverse(child => {
+                    if (child.isMesh) {
+                        if (child.geometry) child.geometry.dispose();
+                        if (child.material) {
+                            if (Array.isArray(child.material)) {
+                                child.material.forEach(m => m.dispose());
+                            } else {
+                                child.material.dispose();
+                            }
+                        }
+                    }
+                });
+                
+                items.splice(i, 1);
+            }
+        }
+
+        // 2. 弾丸 vs 敵 / プレイヤー
+        for (let b = bullets.length - 1; b >= 0; b--) {
+            const bullet = bullets[b];
+            if (!bullet || !bullet.mesh) continue;
+
+            if (bullet.isEnemy) {
+                const dist = player.position.distanceTo(bullet.mesh.position);
+                if (dist < playerRadius + 0.4) {
+                    let enemyDmg = 12;
+                    if (currentDifficulty === 'hard') enemyDmg = 18;
+                    if (currentDifficulty === 'easy') enemyDmg = 8;
+
+                    takeDamage(enemyDmg);
+                    scene.remove(bullet.mesh);
+                    bullets.splice(b, 1);
+                }
+            } else if (bullet.kind === 'beam') {
+                for (let e = enemies.length - 1; e >= 0; e--) {
+                    const enemy = enemies[e];
+                    if (!enemy || !enemy.mesh || bullet.hitEnemies.has(enemy)) continue;
+                    const enemyRadius = enemy.isElite ? 1.6 : 0.9;
+                    const inBeamDepth = enemy.mesh.position.z <= bullet.beamStartZ + enemyRadius &&
+                        enemy.mesh.position.z >= bullet.beamEndZ - enemyRadius;
+                    const inBeamWidth = Math.abs(enemy.mesh.position.x - bullet.beamX) <
+                        enemyRadius + bullet.collisionRadius;
+                    if (inBeamDepth && inBeamWidth) {
+                        bullet.hitEnemies.add(enemy);
+                        damageEnemy(
+                            enemy,
+                            e,
+                            bullet.damage,
+                            enemy.mesh.position.clone(),
+                            bullet.color,
+                            bullet.kind
+                        );
+                    }
+                }
+            } else {
+                for (let e = enemies.length - 1; e >= 0; e--) {
+                    const enemy = enemies[e];
+                    if (!enemy || !enemy.mesh) continue;
+                    
+                    const dist = bullet.mesh.position.distanceTo(enemy.mesh.position);
+                    const enemyRadius = enemy.isElite ? 1.6 : 0.9;
+
+                    if (dist < enemyRadius + (bullet.collisionRadius || 0.3)) {
+                        const impactPos = bullet.mesh.position.clone();
+                        scene.remove(bullet.mesh);
+                        bullets.splice(b, 1);
+                        damageEnemy(enemy, e, bullet.damage, impactPos, bullet.color, bullet.kind);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. 敵機 vs プレイヤー物理接触
+        for (let e = enemies.length - 1; e >= 0; e--) {
+            const enemy = enemies[e];
+            if (!enemy || !enemy.mesh) continue;
+            
+            const dist = player.position.distanceTo(enemy.mesh.position);
+            const enemyRadius = enemy.isElite ? 1.4 : 0.8;
+
+            if (dist < playerRadius + enemyRadius) {
+                if (invincibleTimer > 0) {
+                    createExplosion(enemy.mesh.position, 0xffd700, 20);
+                    score += enemy.isElite ? 350 : 100;
+                    const scoreText = document.getElementById('score-text');
+                    if (scoreText) scoreText.innerText = score.toLocaleString();
+                    scene.remove(enemy.mesh);
+                    enemies.splice(e, 1);
+                } else {
+                    let contactDmg = enemy.isElite ? 40 : 25;
+                    if (currentDifficulty === 'hard') contactDmg *= 1.35;
+                    if (currentDifficulty === 'easy') contactDmg *= 0.7;
+
+                    takeDamage(Math.round(contactDmg));
+                    createExplosion(enemy.mesh.position, 0xff0000, 15);
+                    scene.remove(enemy.mesh);
+                    enemies.splice(e, 1);
+                }
+            }
+        }
+    }
+
+    // アニメーションループ
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (isPaused) {
+            renderer.render(scene, camera);
+            return;
+        }
+
+        if (isGameStarted && !isGameOver && player) {
+            if (isSurvivalMode) {
+                survivalTimer -= 1 / 60;
+                if (survivalTimer <= 0) {
+                    survivalTimer = 0;
+                    triggerMissionClear();
+                }
+                const timerText = document.getElementById('survival-timer-text');
+                if (timerText) timerText.innerText = survivalTimer.toFixed(1) + "s";
+            }
+
+            if (shootCooldown > 0) shootCooldown--;
+
+            if (invincibleTimer > 0) invincibleTimer--;
+            if (multishotTimer > 0) multishotTimer--;
+            if (rapidfireTimer > 0) rapidfireTimer--;
+            updateSubWeaponState();
+
+            if (barrierVisual) {
+                barrierVisual.material.opacity = (shieldStrength > 0) ? 0.25 + Math.sin(Date.now() * 0.01) * 0.1 : 0.0;
+                barrierVisual.rotation.y += 0.02;
+                barrierVisual.rotation.z += 0.01;
+            }
+            if (invincibleBarrierVisual) {
+                if (invincibleTimer > 60) {
+                    invincibleBarrierVisual.material.opacity = 0.4 + Math.sin(Date.now() * 0.02) * 0.15;
+                    invincibleBarrierVisual.rotation.y -= 0.03;
+                } else if (invincibleTimer > 0) {
+                    invincibleBarrierVisual.material.opacity = (Math.floor(invincibleTimer / 4) % 2 === 0) ? 0.3 : 0.0;
+                } else {
+                    invincibleBarrierVisual.material.opacity = 0.0;
+                }
+            }
+
+            updatePowerUpUI();
+
+            let isPrecisionTriggered = keys['ShiftLeft'] || keys['ShiftRight'] || isMousePressing;
+            let speed = isPrecisionTriggered ? 0.10 : 0.22;
+
+            let finalDirection = new THREE.Vector3();
+
+            if (keys['KeyA'] || keys['ArrowLeft']) finalDirection.x = -1;
+            if (keys['KeyD'] || keys['ArrowRight']) finalDirection.x = 1;
+            if (keys['KeyW'] || keys['ArrowUp']) finalDirection.z = -1;
+            if (keys['KeyS'] || keys['ArrowDown']) finalDirection.z = 1;
+
+            if (joystickActive && moveDirection.lengthSq() > 0) {
+                finalDirection.copy(moveDirection);
+            } else if (!joystickActive) {
+                moveDirection.set(0, 0, 0);
+            }
+
+            finalDirection.normalize();
+            player.position.addScaledVector(finalDirection, speed);
+
+            player.rotation.z = -finalDirection.x * 0.35;
+            player.rotation.x = finalDirection.z * 0.15;
+
+            // 固定境界を廃止。グリッドを自機の近くへ再配置し、半無限フィールドに見せる
+            if (gridHelper) {
+                gridHelper.position.x = Math.round(player.position.x / 20) * 20;
+                gridHelper.position.z = Math.round(player.position.z / 20) * 20;
+            }
+
+            if (!isSurvivalMode) {
+                fireWeapons();
+            }
+
+            if (playerThruster) {
+                playerThruster.scale.setScalar(0.85 + Math.random() * 0.3);
+            }
+
+            const targetCamX = player.position.x * 0.72;              
+            const targetCamZ = player.position.z + 12.0;             
+            const targetCamY = 14.5;                                 
+
+            camera.position.x += (targetCamX - camera.position.x) * 0.08;
+            camera.position.y += (targetCamY - camera.position.y) * 0.08;
+            camera.position.z += (targetCamZ - camera.position.z) * 0.08;
+
+            const lookAtTarget = new THREE.Vector3(
+                player.position.x * 0.82, 
+                0, 
+                player.position.z - 3.5
+            );
+            camera.lookAt(lookAtTarget);
+
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                if (b.kind === 'beam') {
+                    b.life--;
+                    const fade = Math.max(0, b.life / 18);
+                    if (b.mesh.children[0] && b.mesh.children[0].material) {
+                        b.mesh.children[0].material.opacity = 0.82 * fade;
+                    }
+                    if (b.mesh.children[1] && b.mesh.children[1].material) {
+                        b.mesh.children[1].material.opacity = 0.22 * fade;
+                    }
+                } else {
+                    if (b.kind === 'missile') {
+                        if (!b.target || !b.target.mesh || !enemies.includes(b.target)) {
+                            b.target = getMissileTargets()[0] || null;
+                        }
+                        if (b.target && b.target.mesh) {
+                            const desiredVelocity = b.target.mesh.position.clone()
+                                .sub(b.mesh.position)
+                                .normalize()
+                                .multiplyScalar(0.48);
+                            b.velocity.lerp(desiredVelocity, b.turnRate);
+                        }
+                        b.life--;
+                        b.mesh.lookAt(b.mesh.position.clone().add(b.velocity));
+                    }
+                    b.mesh.position.add(b.velocity);
+                }
+
+                const relativeX = b.mesh.position.x - player.position.x;
+                const relativeZ = b.mesh.position.z - player.position.z;
+                const specialExpired = (b.kind === 'missile' || b.kind === 'beam') && b.life <= 0;
+                if (specialExpired || Math.abs(relativeZ) > 90 || Math.abs(relativeX) > 90) {
+                    scene.remove(b.mesh);
+                    bullets.splice(i, 1);
+                }
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const e = enemies[i];
+                e.mesh.position.z += e.speed;
+
+                let eliteCooldown = 110;
+                if (currentDifficulty === 'hard') eliteCooldown = 75;
+                if (currentDifficulty === 'easy') eliteCooldown = 160;
+
+                if (e.isElite) {
+                    e.shootTimer++;
+                    if (e.shootTimer > eliteCooldown) {
+                        e.shootTimer = 0;
+                        const enemyPos = e.mesh.position.clone();
+                        let bulletSpeed = 0.24;
+                        if (currentDifficulty === 'easy') bulletSpeed = 0.16;
+                        if (currentDifficulty === 'hard') bulletSpeed = 0.32;
+
+                        const targetDir = player.position.clone().sub(enemyPos).normalize().multiplyScalar(bulletSpeed);
+                        createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), targetDir, 0xff0000, 10, 1.0, true);
+                    }
+                }
+                else if (isSurvivalMode) {
+                    e.shootTimer = (e.shootTimer || 0) + 1;
+                    if (e.shootTimer > 130) {
+                        e.shootTimer = 0;
+                        const enemyPos = e.mesh.position.clone();
+                        createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), new THREE.Vector3(0, 0, 0.2), 0xffaa00, 10, 0.8, true);
+                    }
+                }
+
+                if (e.mesh.position.z > player.position.z + 28 || Math.abs(e.mesh.position.x - player.position.x) > 80) {
+                    scene.remove(e.mesh);
+                    enemies.splice(i, 1);
+                }
+            }
+
+            for (let i = items.length - 1; i >= 0; i--) {
+                const item = items[i];
+                item.mesh.position.z += item.speed;
+                item.mesh.rotation.x += 0.02;
+                item.mesh.rotation.y += 0.03;
+
+                if (item.mesh.position.z > player.position.z + 28 || Math.abs(item.mesh.position.x - player.position.x) > 80) {
+                    scene.remove(item.mesh);
+                    items.splice(i, 1);
+                }
+            }
+        } else if (isGameOver || document.getElementById('mission-clear').style.display === 'block') {
+            camera.position.x += (0 - camera.position.x) * 0.05;
+            camera.position.y += (15 - camera.position.y) * 0.05;
+            camera.position.z += (18 - camera.position.z) * 0.05;
+            camera.lookAt(0, 0, -2);
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.mesh.position.add(p.velocity);
+            p.life--;
+            p.mesh.material.opacity = p.life / 50;
+
+            if (p.life <= 0) {
+                scene.remove(p.mesh);
+                particles.splice(i, 1);
+            }
+        }
+
+        handleCollisions();
+
+        renderer.render(scene, camera);
+    }
+
+    // パワーアップ状態のUIバッジ更新
+    function updatePowerUpUI() {
+        const badgeInv = document.getElementById('badge-invincible');
+        const badgeMulti = document.getElementById('badge-multishot');
+        const badgeRapid = document.getElementById('badge-rapidfire');
+        const badgeShield = document.getElementById('badge-shield');
+
+        if (invincibleTimer > 0) {
+            badgeInv.style.display = 'flex';
+            document.getElementById('val-invincible').innerText = (invincibleTimer / 60).toFixed(1);
+        } else {
+            badgeInv.style.display = 'none';
+        }
+
+        if (multishotTimer > 0) {
+            badgeMulti.style.display = 'flex';
+            document.getElementById('val-multishot').innerText = (multishotTimer / 60).toFixed(1);
+        } else {
+            badgeMulti.style.display = 'none';
+        }
+
+        if (rapidfireTimer > 0) {
+            badgeRapid.style.display = 'flex';
+            document.getElementById('val-rapidfire').innerText = (rapidfireTimer / 60).toFixed(1);
+        } else {
+            badgeRapid.style.display = 'none';
+        }
+
+        if (shieldStrength > 0) {
+            badgeShield.style.display = 'flex';
+            document.getElementById('val-shield').innerText = shieldStrength;
+        } else {
+            badgeShield.style.display = 'none';
+        }
+    }
+
+    // パワーアップ効果適用
+    function applyPowerup(type) {
+        if (type === 'shield') {
+            shieldStrength = Math.min(2, shieldStrength + 1); 
+            showNotification("SHIELD ACTIVE", "#00ffff");
+        } 
+        else if (type === 'repair') {
+            playerHP = Math.min(100, playerHP + 10);
+            const hpBar = document.getElementById('hp-bar');
+            if (hpBar) hpBar.style.width = playerHP + '%';
+            showNotification("REPAIR COMPLETED (+10 HP)", "#00ff55");
+        }
+        else if (type === 'rapidfire') {
+            if (!isSurvivalMode) {
+                rapidfireTimer = 480; 
+                showNotification("RAPID FIRE ENGAGED", "#ff5500");
+            } else {
+                showNotification("RAPID POWER DISCARDED (DODGE MODE)", "#ff5500");
+            }
+        } 
+        else if (type === 'multishot') {
+            if (!isSurvivalMode) {
+                multishotTimer = 480; 
+                showNotification("MULTISHOT ACTIVE", "#ff00ff");
+            } else {
+                showNotification("MULTI SHOT DISCARDED (DODGE MODE)", "#ff00ff");
+            }
+        } 
+        else if (type === 'invincible') {
+            invincibleTimer = 420; 
+            showNotification("NANO-BARRIER INVINCIBLE", "#ffd700");
+        }
+    }
