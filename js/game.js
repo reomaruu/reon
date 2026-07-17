@@ -28,9 +28,27 @@
     let survivalTimeLimit = 30; // 30, 60, 120
     let survivalTimer = 0.0;
 
+    // スコアボス・一時戦闘アリーナ
+    const BOSS_SCORE_INTERVAL = 5000;
+    const BOSS_ARENA_HALF_WIDTH = 18;
+    const BOSS_ARENA_HALF_DEPTH = 14;
+    let nextBossScore = BOSS_SCORE_INTERVAL;
+    let bossCount = 0;
+    let bossActive = false;
+    let bossEntity = null;
+    let bossArenaBoundary = null;
+    const bossArenaCenter = new THREE.Vector3();
+
     // キャラクター設定
     let currentSelectedType = 'cobalt';
     let currentSelectedSubWeapon = 'missile';
+
+    // VORTEX手動チャージショット
+    let isVortexCharging = false;
+    let vortexChargeFrames = 0;
+    const VORTEX_MEDIUM_CHARGE = 45;
+    const VORTEX_MAX_CHARGE = 120;
+
     let activeFighterConfig = {
         color: 0x00ffff,
         bulletColor: 0x00ffff,
@@ -447,6 +465,20 @@
         isGameOver = false;
         isPaused = false;
         shootCooldown = 0;
+        isVortexCharging = false;
+        vortexChargeFrames = 0;
+        keys['KeyN'] = false;
+        nextBossScore = BOSS_SCORE_INTERVAL;
+        bossCount = 0;
+        bossActive = false;
+        bossEntity = null;
+        bossArenaCenter.set(0, 0, 0);
+        if (bossArenaBoundary) {
+            scene.remove(bossArenaBoundary);
+            bossArenaBoundary = null;
+        }
+        const bossHud = document.getElementById('boss-hud');
+        if (bossHud) bossHud.style.display = 'none';
 
         if (isSurvivalMode) {
             survivalTimer = parseFloat(survivalTimeLimit);
@@ -509,6 +541,7 @@
 
         updateSubWeaponUI();
         updateBoostUI();
+        updateVortexChargeUI();
     }
 
     // 3Dシーン初期化
@@ -544,7 +577,7 @@
         scene.add(gridHelper);
 
         window.addEventListener('keydown', (e) => { 
-            if ((e.code === 'Space' || e.code === 'ShiftLeft' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
+            if ((e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'KeyN' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
                 e.preventDefault();
             }
             keys[e.code] = true; 
@@ -554,6 +587,20 @@
             if (e.code === 'ShiftLeft' && !e.repeat && isGameStarted && !isGameOver && !isPaused) {
                 quickBoostRequested = true;
             }
+            if (
+                e.code === 'KeyN' &&
+                !e.repeat &&
+                currentSelectedType === 'vortex' &&
+                isGameStarted &&
+                !isGameOver &&
+                !isPaused &&
+                !isSurvivalMode &&
+                shootCooldown <= 0
+            ) {
+                isVortexCharging = true;
+                vortexChargeFrames = 0;
+                updateVortexChargeUI();
+            }
             if (e.code === 'KeyP' || e.code === 'Escape') {
                 togglePause();
             }
@@ -561,6 +608,7 @@
         window.addEventListener('keyup', (e) => {
             keys[e.code] = false;
             if (e.code === 'Space') isSubShieldActive = false;
+            if (e.code === 'KeyN' && isVortexCharging) releaseVortexCharge();
         });
         
         window.addEventListener('mousedown', (e) => {
@@ -577,6 +625,7 @@
             quickBoostRequested = false;
             quickBoostFrames = 0;
             quickBoostDirection.set(0, 0, 0);
+            cancelVortexCharge();
             joystickActive = false;
             if (knob) {
                 knob.style.transform = 'translate(0px, 0px)';
@@ -800,9 +849,164 @@
         });
     }
 
-    // 武器展開システム（オート射撃時）
+    function setVortexCockpitCharge(ratio) {
+        if (!playerCockpit || !playerCockpit.material) return;
+        playerCockpit.material.emissiveIntensity = 0.4 + ratio * 1.8;
+        const scale = 1 + ratio * 0.22;
+        playerCockpit.scale.set(scale, scale, scale);
+    }
+
+    function cancelVortexCharge() {
+        isVortexCharging = false;
+        vortexChargeFrames = 0;
+        setVortexCockpitCharge(0);
+        updateVortexChargeUI();
+    }
+
+    function updateVortexChargeState() {
+        if (currentSelectedType !== 'vortex') {
+            if (isVortexCharging) cancelVortexCharge();
+            updateVortexChargeUI();
+            return;
+        }
+
+        if (isVortexCharging) {
+            vortexChargeFrames = Math.min(VORTEX_MAX_CHARGE, vortexChargeFrames + 1);
+            setVortexCockpitCharge(vortexChargeFrames / VORTEX_MAX_CHARGE);
+        }
+        updateVortexChargeUI();
+    }
+
+    function updateVortexChargeUI() {
+        const hud = document.getElementById('vortex-charge-hud');
+        const fill = document.getElementById('vortex-charge-fill');
+        const status = document.getElementById('vortex-charge-status');
+        if (!hud || !fill || !status) return;
+
+        hud.style.display = currentSelectedType === 'vortex' ? 'block' : 'none';
+        const ratio = Math.min(1, vortexChargeFrames / VORTEX_MAX_CHARGE);
+        fill.style.width = `${ratio * 100}%`;
+
+        if (!isVortexCharging) {
+            status.innerText = 'HOLD N TO CHARGE';
+            status.style.color = '#ffffff';
+        } else if (vortexChargeFrames >= VORTEX_MAX_CHARGE) {
+            status.innerText = 'MAX CHARGE — RELEASE N';
+            status.style.color = '#ff66ff';
+        } else if (vortexChargeFrames >= VORTEX_MEDIUM_CHARGE) {
+            status.innerText = `MEDIUM ${Math.ceil(ratio * 100)}%`;
+            status.style.color = '#cc88ff';
+        } else {
+            status.innerText = `NORMAL ${Math.ceil(ratio * 100)}%`;
+            status.style.color = '#aaaaff';
+        }
+    }
+
+    function createVortexChargeProjectile(tier) {
+        const settings = {
+            normal: { damage: 1.0, radius: 0.48, speed: 0.68, life: 115 },
+            medium: { damage: 4.0, radius: 0.82, speed: 0.58, life: 130 },
+            max: { damage: 12.0, radius: 1.22, speed: 0.48, life: 150 }
+        }[tier];
+
+        const color = tier === 'max' ? 0xff33ff : (tier === 'medium' ? 0xcc66ff : 0x9966ff);
+        const geometry = new THREE.SphereGeometry(settings.radius, 18, 18);
+        const material = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.95
+        });
+        const projectile = new THREE.Mesh(geometry, material);
+
+        const glowGeometry = new THREE.SphereGeometry(settings.radius * 1.55, 14, 14);
+        const glowMaterial = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: tier === 'max' ? 0.38 : 0.22,
+            wireframe: true
+        });
+        projectile.add(new THREE.Mesh(glowGeometry, glowMaterial));
+        projectile.position.copy(player.position).add(new THREE.Vector3(0, 0, -1.5));
+        scene.add(projectile);
+
+        bullets.push({
+            mesh: projectile,
+            velocity: new THREE.Vector3(0, 0, -settings.speed),
+            life: settings.life,
+            isEnemy: false,
+            damage: settings.damage,
+            kind: tier === 'max' ? 'vortexMax' : 'vortexCharge',
+            color: color,
+            collisionRadius: settings.radius,
+            chargeTier: tier
+        });
+    }
+
+    function spawnVortexFragments(origin, color, ignoredEnemy) {
+        const fragmentCount = 12;
+        for (let i = 0; i < fragmentCount; i++) {
+            const angle = (Math.PI * 2 * i) / fragmentCount;
+            const direction = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+            const geometry = new THREE.SphereGeometry(0.3, 10, 10);
+            const material = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.9
+            });
+            const fragment = new THREE.Mesh(geometry, material);
+            fragment.position.copy(origin).addScaledVector(direction, 0.8);
+            scene.add(fragment);
+
+            bullets.push({
+                mesh: fragment,
+                velocity: direction.multiplyScalar(0.42),
+                life: 48,
+                isEnemy: false,
+                damage: 1.6,
+                kind: 'vortexFragment',
+                color: color,
+                collisionRadius: 0.32,
+                ignoreEnemy: ignoredEnemy
+            });
+        }
+    }
+
+    function releaseVortexCharge() {
+        if (!isVortexCharging) return;
+
+        if (
+            currentSelectedType !== 'vortex' ||
+            !isGameStarted ||
+            isGameOver ||
+            isPaused ||
+            isSurvivalMode ||
+            !player
+        ) {
+            cancelVortexCharge();
+            return;
+        }
+
+        let tier = 'normal';
+        if (vortexChargeFrames >= VORTEX_MAX_CHARGE) {
+            tier = 'max';
+        } else if (vortexChargeFrames >= VORTEX_MEDIUM_CHARGE) {
+            tier = 'medium';
+        }
+
+        createVortexChargeProjectile(tier);
+        if (tier === 'max') {
+            showNotification('VORTEX MAXIMUM CHARGE', '#ff33ff');
+        } else if (tier === 'medium') {
+            showNotification('VORTEX MEDIUM CHARGE', '#cc66ff');
+        }
+
+        shootCooldown = 20;
+        cancelVortexCharge();
+    }
+
+    // 武器展開システム（VORTEX以外はオート射撃）
     function fireWeapons() {
-        if (shootCooldown > 0) return;
+        if (currentSelectedType === 'vortex' || shootCooldown > 0) return;
 
         const isRapid = rapidfireTimer > 0;
         const cooldownVal = isRapid ? activeFighterConfig.rapidCooldown : activeFighterConfig.baseCooldown;
@@ -812,37 +1016,24 @@
         pos.z -= 1.3;
 
         const isMulti = multishotTimer > 0;
-        const isVortex = currentSelectedType === 'vortex';
         const isGaia = currentSelectedType === 'gaia';
 
-        // 1. 通常 or 連射の直進弾
+        // COBALT / REDLINE / HORIZON: 前方へのオート射撃
         if (currentSelectedType === 'cobalt' || currentSelectedType === 'redline' || currentSelectedType === 'horizon') {
             createBullet(pos, new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
             
             if (isMulti) {
-                // マルチショット発火時は左右追加
                 createBullet(pos, new THREE.Vector3(-0.25, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
                 createBullet(pos, new THREE.Vector3(0.25, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
             }
         }
-        // 2. W字型ワイド攻撃（Vortex専用）
-        else if (isVortex) {
-            createBullet(pos.clone().add(new THREE.Vector3(-0.4, 0, 0)), new THREE.Vector3(-0.15, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
-            createBullet(pos.clone().add(new THREE.Vector3(0.4, 0, 0)), new THREE.Vector3(0.15, 0, -0.62), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
-            
-            if (isMulti) {
-                // マルチショット発火時はさらに前方中央に超高速直撃弾をプラス
-                createBullet(pos, new THREE.Vector3(0, 0, -0.72), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 1.2, false, activeFighterConfig.damage);
-            }
-        }
-        // 3. T字型3方向拡散（Gaia専用）
+        // GAIA: T字型3方向拡散
         else if (isGaia) {
             createBullet(pos, new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
             createBullet(pos, new THREE.Vector3(-0.62, 0, 0), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
             createBullet(pos, new THREE.Vector3(0.62, 0, 0), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale * 0.9, false, activeFighterConfig.damage);
 
             if (isMulti) {
-                // マルチショット時は直進弾が2連射になる
                 createBullet(pos.clone().add(new THREE.Vector3(-0.15, 0, -0.2)), new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
                 createBullet(pos.clone().add(new THREE.Vector3(0.15, 0, -0.2)), new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
             }
@@ -1158,6 +1349,8 @@
         scene.remove(player);
 
         document.getElementById('pause-btn').style.display = 'none';
+        const bossHud = document.getElementById('boss-hud');
+        if (bossHud) bossHud.style.display = 'none';
         document.getElementById('final-score-text').innerText = score.toLocaleString();
         document.getElementById('game-over').style.display = 'block';
 
@@ -1266,9 +1459,232 @@
         backToTitleFromChar();
     }
 
+    function updateScoreDisplay() {
+        const scoreText = document.getElementById('score-text');
+        if (scoreText) scoreText.innerText = score.toLocaleString();
+    }
+
+    function addScore(amount, allowBossCheck = true) {
+        score += amount;
+        updateScoreDisplay();
+        if (allowBossCheck) checkBossEncounter();
+    }
+
+    function checkBossEncounter() {
+        if (isSurvivalMode || bossActive || !isGameStarted || isGameOver) return;
+        if (score >= nextBossScore) startBossEncounter();
+    }
+
+    function createBossArenaBoundary() {
+        if (bossArenaBoundary) scene.remove(bossArenaBoundary);
+
+        const x = BOSS_ARENA_HALF_WIDTH;
+        const z = BOSS_ARENA_HALF_DEPTH;
+        const points = [
+            new THREE.Vector3(bossArenaCenter.x - x, 0.08, bossArenaCenter.z - z),
+            new THREE.Vector3(bossArenaCenter.x + x, 0.08, bossArenaCenter.z - z),
+            new THREE.Vector3(bossArenaCenter.x + x, 0.08, bossArenaCenter.z + z),
+            new THREE.Vector3(bossArenaCenter.x - x, 0.08, bossArenaCenter.z + z)
+        ];
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({
+            color: 0xff1744,
+            transparent: true,
+            opacity: 0.9
+        });
+        bossArenaBoundary = new THREE.LineLoop(geometry, material);
+        scene.add(bossArenaBoundary);
+    }
+
+    function clearBossProjectiles() {
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            if (!bullets[i].isEnemy) continue;
+            scene.remove(bullets[i].mesh);
+            bullets.splice(i, 1);
+        }
+    }
+
+    function startBossEncounter() {
+        if (bossActive || isSurvivalMode || !player) return;
+
+        bossActive = true;
+        bossCount++;
+        nextBossScore += BOSS_SCORE_INTERVAL;
+        bossArenaCenter.set(player.position.x, 0, player.position.z);
+
+        // 通常敵と敵弾を一度片づけ、ボス戦へ明確に切り替える。
+        enemies.forEach(enemy => {
+            if (enemy && enemy.mesh) scene.remove(enemy.mesh);
+        });
+        enemies = [];
+        clearBossProjectiles();
+        createBossArenaBoundary();
+
+        const bossMesh = new THREE.Group();
+        const coreGeometry = new THREE.IcosahedronGeometry(3.2, 1);
+        const coreMaterial = new THREE.MeshStandardMaterial({
+            color: 0x4a0010,
+            emissive: 0xff1744,
+            emissiveIntensity: 0.85,
+            metalness: 0.85,
+            roughness: 0.2
+        });
+        bossMesh.add(new THREE.Mesh(coreGeometry, coreMaterial));
+
+        const shellGeometry = new THREE.TorusGeometry(4.25, 0.28, 10, 48);
+        const shellMaterial = new THREE.MeshBasicMaterial({
+            color: 0xff3355,
+            transparent: true,
+            opacity: 0.9
+        });
+        const ringA = new THREE.Mesh(shellGeometry, shellMaterial);
+        ringA.rotation.x = Math.PI / 2;
+        bossMesh.add(ringA);
+
+        const ringB = new THREE.Mesh(shellGeometry, shellMaterial.clone());
+        ringB.rotation.y = Math.PI / 2;
+        bossMesh.add(ringB);
+
+        const wingGeometry = new THREE.BoxGeometry(8.5, 0.45, 1.5);
+        const wingMaterial = new THREE.MeshStandardMaterial({
+            color: 0x220008,
+            emissive: 0xff0033,
+            emissiveIntensity: 0.55,
+            metalness: 0.9
+        });
+        bossMesh.add(new THREE.Mesh(wingGeometry, wingMaterial));
+
+        let baseHp = 80;
+        if (currentDifficulty === 'easy') baseHp = 55;
+        if (currentDifficulty === 'hard') baseHp = 115;
+        const maxHp = baseHp + (bossCount - 1) * 20;
+
+        bossMesh.position.set(
+            bossArenaCenter.x,
+            0,
+            bossArenaCenter.z - BOSS_ARENA_HALF_DEPTH + 2
+        );
+        scene.add(bossMesh);
+
+        bossEntity = {
+            mesh: bossMesh,
+            isBoss: true,
+            isElite: false,
+            hp: maxHp,
+            maxHp: maxHp,
+            speed: 0,
+            shootTimer: 0,
+            phase: 0,
+            contactCooldown: 0
+        };
+        enemies.push(bossEntity);
+        updateBossUI(bossEntity);
+
+        const bossHud = document.getElementById('boss-hud');
+        if (bossHud) bossHud.style.display = 'block';
+        const bossTitle = document.getElementById('boss-title');
+        if (bossTitle) bossTitle.innerText = `BOSS ${String(bossCount).padStart(2, '0')} — NEON WARDEN`;
+
+        showNotification(`WARNING — BOSS AT ${score.toLocaleString()} PTS`, '#ff1744');
+    }
+
+    function updateBossUI(boss) {
+        if (!boss || !boss.isBoss) return;
+        const fill = document.getElementById('boss-hp-fill');
+        const text = document.getElementById('boss-hp-text');
+        const ratio = Math.max(0, boss.hp / boss.maxHp);
+        if (fill) fill.style.width = `${ratio * 100}%`;
+        if (text) text.innerText = `${Math.ceil(Math.max(0, boss.hp))} / ${boss.maxHp}`;
+    }
+
+    function fireBossPattern(boss) {
+        const origin = boss.mesh.position.clone();
+        origin.z += 2.0;
+        const baseDirection = player.position.clone().sub(origin);
+        baseDirection.y = 0;
+        baseDirection.normalize();
+
+        let bulletSpeed = 0.23;
+        let bossDamage = 14;
+        if (currentDifficulty === 'easy') {
+            bulletSpeed = 0.18;
+            bossDamage = 10;
+        } else if (currentDifficulty === 'hard') {
+            bulletSpeed = 0.29;
+            bossDamage = 18;
+        }
+
+        [-0.34, -0.17, 0, 0.17, 0.34].forEach(angle => {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const direction = new THREE.Vector3(
+                baseDirection.x * cos - baseDirection.z * sin,
+                0,
+                baseDirection.x * sin + baseDirection.z * cos
+            ).multiplyScalar(bulletSpeed);
+            createBullet(origin.clone(), direction, 0xff1744, 180, 1.15, true);
+            bullets[bullets.length - 1].bossDamage = bossDamage;
+        });
+    }
+
+    function updateBoss(boss) {
+        boss.phase += 0.022;
+        boss.mesh.position.x = bossArenaCenter.x + Math.sin(boss.phase) * 13.5;
+        boss.mesh.position.z = bossArenaCenter.z - 11.5 + Math.sin(boss.phase * 0.55) * 2.0;
+        boss.mesh.rotation.y += 0.016;
+        boss.mesh.rotation.z = Math.sin(boss.phase * 0.7) * 0.08;
+
+        if (boss.contactCooldown > 0) boss.contactCooldown--;
+        boss.shootTimer++;
+
+        let attackCooldown = 75;
+        if (currentDifficulty === 'easy') attackCooldown = 105;
+        if (currentDifficulty === 'hard') attackCooldown = 55;
+        if (boss.shootTimer >= attackCooldown) {
+            boss.shootTimer = 0;
+            fireBossPattern(boss);
+        }
+    }
+
+    function constrainPlayerToBossArena() {
+        if (!bossActive || !player) return;
+        player.position.x = THREE.MathUtils.clamp(
+            player.position.x,
+            bossArenaCenter.x - BOSS_ARENA_HALF_WIDTH,
+            bossArenaCenter.x + BOSS_ARENA_HALF_WIDTH
+        );
+        player.position.z = THREE.MathUtils.clamp(
+            player.position.z,
+            bossArenaCenter.z - BOSS_ARENA_HALF_DEPTH,
+            bossArenaCenter.z + BOSS_ARENA_HALF_DEPTH
+        );
+    }
+
+    function defeatBoss(boss, bossIndex) {
+        const defeatedPosition = boss.mesh.position.clone();
+        createExplosion(defeatedPosition, 0xff1744, 70);
+        scene.remove(boss.mesh);
+        enemies.splice(bossIndex, 1);
+
+        bossActive = false;
+        bossEntity = null;
+        if (bossArenaBoundary) {
+            scene.remove(bossArenaBoundary);
+            bossArenaBoundary = null;
+        }
+        clearBossProjectiles();
+
+        const bossHud = document.getElementById('boss-hud');
+        if (bossHud) bossHud.style.display = 'none';
+
+        addScore(2000, false);
+        spawnItem(defeatedPosition, 'repair');
+        showNotification('BOSS DESTROYED — FIELD UNLOCKED', '#00ffcc');
+    }
+
     // 敵出現ロジック
     function spawnEnemy() {
-        if (!isGameStarted || isGameOver || isPaused) return;
+        if (!isGameStarted || isGameOver || isPaused || bossActive) return;
 
         // 🌟サバイバルモード（耐久ミッション）の場合、敵の発生頻度を半分に制限して、精密な回避活動に専念しやすくします
         if (isSurvivalMode && Math.random() < 0.5) return;
@@ -1434,11 +1850,19 @@
             damage *= 2.0;
         }
 
-        createExplosion(impactPos, color, sourceKind === 'beam' ? 10 : 5);
+        createExplosion(impactPos, color, enemy.isBoss ? 14 : (sourceKind === 'beam' ? 10 : 5));
         enemy.hp -= damage;
-        enemy.mesh.position.z -= sourceKind === 'beam' ? 0.55 : 0.25;
+        if (!enemy.isBoss) {
+            enemy.mesh.position.z -= sourceKind === 'beam' ? 0.55 : 0.25;
+        }
 
+        if (enemy.isBoss) updateBossUI(enemy);
         if (enemy.hp > 0) return;
+
+        if (enemy.isBoss) {
+            defeatBoss(enemy, enemyIndex);
+            return;
+        }
 
         createExplosion(
             enemy.mesh.position,
@@ -1450,12 +1874,10 @@
             spawnItem(enemy.mesh.position.clone(), 'repair');
         }
 
-        score += enemy.isElite ? 250 : 100;
-        const scoreText = document.getElementById('score-text');
-        if (scoreText) scoreText.innerText = score.toLocaleString();
-
+        const earnedScore = enemy.isElite ? 250 : 100;
         scene.remove(enemy.mesh);
         enemies.splice(enemyIndex, 1);
+        addScore(earnedScore);
     }
 
     // 当たり判定・衝突処理
@@ -1502,6 +1924,7 @@
                     let enemyDmg = 12;
                     if (currentDifficulty === 'hard') enemyDmg = 18;
                     if (currentDifficulty === 'easy') enemyDmg = 8;
+                    if (bullet.bossDamage) enemyDmg = bullet.bossDamage;
 
                     takeDamage(enemyDmg);
                     scene.remove(bullet.mesh);
@@ -1511,7 +1934,7 @@
                 for (let e = enemies.length - 1; e >= 0; e--) {
                     const enemy = enemies[e];
                     if (!enemy || !enemy.mesh || bullet.hitEnemies.has(enemy)) continue;
-                    const enemyRadius = enemy.isElite ? 1.6 : 0.9;
+                    const enemyRadius = enemy.isBoss ? 4.4 : (enemy.isElite ? 1.6 : 0.9);
                     const inBeamDepth = enemy.mesh.position.z <= bullet.beamStartZ + enemyRadius &&
                         enemy.mesh.position.z >= bullet.beamEndZ - enemyRadius;
                     const inBeamWidth = Math.abs(enemy.mesh.position.x - bullet.beamX) <
@@ -1531,15 +1954,21 @@
             } else {
                 for (let e = enemies.length - 1; e >= 0; e--) {
                     const enemy = enemies[e];
-                    if (!enemy || !enemy.mesh) continue;
+                    if (!enemy || !enemy.mesh || bullet.ignoreEnemy === enemy) continue;
                     
                     const dist = bullet.mesh.position.distanceTo(enemy.mesh.position);
-                    const enemyRadius = enemy.isElite ? 1.6 : 0.9;
+                    const enemyRadius = enemy.isBoss ? 4.4 : (enemy.isElite ? 1.6 : 0.9);
 
                     if (dist < enemyRadius + (bullet.collisionRadius || 0.3)) {
                         const impactPos = bullet.mesh.position.clone();
                         scene.remove(bullet.mesh);
                         bullets.splice(b, 1);
+
+                        if (bullet.kind === 'vortexMax') {
+                            createExplosion(impactPos, bullet.color, 36);
+                            spawnVortexFragments(impactPos, bullet.color, enemy);
+                        }
+
                         damageEnemy(enemy, e, bullet.damage, impactPos, bullet.color, bullet.kind);
                         break;
                     }
@@ -1553,16 +1982,34 @@
             if (!enemy || !enemy.mesh) continue;
             
             const dist = player.position.distanceTo(enemy.mesh.position);
-            const enemyRadius = enemy.isElite ? 1.4 : 0.8;
+            const enemyRadius = enemy.isBoss ? 4.2 : (enemy.isElite ? 1.4 : 0.8);
 
             if (dist < playerRadius + enemyRadius) {
+                if (enemy.isBoss) {
+                    if (enemy.contactCooldown <= 0) {
+                        if (invincibleTimer <= 0) {
+                            let contactDmg = 30;
+                            if (currentDifficulty === 'easy') contactDmg = 20;
+                            if (currentDifficulty === 'hard') contactDmg = 40;
+                            takeDamage(contactDmg);
+                        }
+                        enemy.contactCooldown = 60;
+                        const pushDirection = player.position.clone().sub(enemy.mesh.position);
+                        pushDirection.y = 0;
+                        if (pushDirection.lengthSq() > 0) {
+                            player.position.addScaledVector(pushDirection.normalize(), 2.5);
+                            constrainPlayerToBossArena();
+                        }
+                    }
+                    continue;
+                }
+
                 if (invincibleTimer > 0) {
                     createExplosion(enemy.mesh.position, 0xffd700, 20);
-                    score += enemy.isElite ? 350 : 100;
-                    const scoreText = document.getElementById('score-text');
-                    if (scoreText) scoreText.innerText = score.toLocaleString();
+                    const earnedScore = enemy.isElite ? 350 : 100;
                     scene.remove(enemy.mesh);
                     enemies.splice(e, 1);
+                    addScore(earnedScore);
                 } else {
                     let contactDmg = enemy.isElite ? 40 : 25;
                     if (currentDifficulty === 'hard') contactDmg *= 1.35;
@@ -1604,6 +2051,7 @@
             if (rapidfireTimer > 0) rapidfireTimer--;
             updateSubWeaponState();
             updateQuickBoostState();
+            updateVortexChargeState();
 
             if (barrierVisual) {
                 barrierVisual.material.opacity = (shieldStrength > 0) ? 0.25 + Math.sin(Date.now() * 0.01) * 0.1 : 0.0;
@@ -1654,6 +2102,8 @@
                 player.position.addScaledVector(quickBoostDirection, boostStep);
                 quickBoostFrames--;
             }
+
+            constrainPlayerToBossArena();
 
             player.rotation.z = -finalDirection.x * 0.35;
             player.rotation.x = finalDirection.z * 0.15;
@@ -1746,13 +2196,27 @@
                         }
                         b.life--;
                         b.mesh.lookAt(b.mesh.position.clone().add(b.velocity));
+                    } else if (
+                        b.kind === 'vortexCharge' ||
+                        b.kind === 'vortexMax' ||
+                        b.kind === 'vortexFragment'
+                    ) {
+                        b.life--;
+                        b.mesh.rotation.x += 0.08;
+                        b.mesh.rotation.y += 0.11;
                     }
                     b.mesh.position.add(b.velocity);
                 }
 
                 const relativeX = b.mesh.position.x - player.position.x;
                 const relativeZ = b.mesh.position.z - player.position.z;
-                const specialExpired = (b.kind === 'missile' || b.kind === 'beam') && b.life <= 0;
+                const specialExpired = (
+                    b.kind === 'missile' ||
+                    b.kind === 'beam' ||
+                    b.kind === 'vortexCharge' ||
+                    b.kind === 'vortexMax' ||
+                    b.kind === 'vortexFragment'
+                ) && b.life <= 0;
                 if (specialExpired || Math.abs(relativeZ) > 90 || Math.abs(relativeX) > 90) {
                     scene.remove(b.mesh);
                     bullets.splice(i, 1);
@@ -1761,6 +2225,12 @@
 
             for (let i = enemies.length - 1; i >= 0; i--) {
                 const e = enemies[i];
+
+                if (e.isBoss) {
+                    updateBoss(e);
+                    continue;
+                }
+
                 e.mesh.position.z += e.speed;
 
                 let eliteCooldown = 110;
