@@ -11,11 +11,14 @@
     let isGameOver = false;
     let isPaused = false;
 
-    // 上下矢印キーで連続調整するカメラ視点（-1: 低い視点 / 0: 標準 / 1: 俯瞰）
+    // 矢印キーで連続調整するカメラ視点
+    // 上下: -1（低い視点）〜 1（俯瞰） / 左右: -1（左）〜 1（右）
     let cameraViewLevel = 0;
+    let cameraHorizontalLevel = 0;
     const CAMERA_VIEW_MIN = -1;
     const CAMERA_VIEW_MAX = 1;
-    const CAMERA_VIEW_CHANGE_SPEED = 0.012;
+    const CAMERA_VIEW_CHANGE_SPEED = 0.02;
+    const CAMERA_HORIZONTAL_MAX_ANGLE = Math.PI * 0.18;
 
     // 難易度設定
     let currentDifficulty = 'normal'; // easy, normal, hard
@@ -466,7 +469,10 @@
         keys['Space'] = false;
         keys['ArrowUp'] = false;
         keys['ArrowDown'] = false;
+        keys['ArrowLeft'] = false;
+        keys['ArrowRight'] = false;
         cameraViewLevel = 0;
+        cameraHorizontalLevel = 0;
 
         bullets.forEach(b => { if (b && b.mesh) scene.remove(b.mesh); });
         enemies.forEach(e => { if (e && e.mesh) scene.remove(e.mesh); });
@@ -1534,8 +1540,8 @@
 
             let finalDirection = new THREE.Vector3();
 
-            if (keys['KeyA'] || keys['ArrowLeft']) finalDirection.x = -1;
-            if (keys['KeyD'] || keys['ArrowRight']) finalDirection.x = 1;
+            if (keys['KeyA']) finalDirection.x = -1;
+            if (keys['KeyD']) finalDirection.x = 1;
             if (keys['KeyW']) finalDirection.z = -1;
             if (keys['KeyS']) finalDirection.z = 1;
 
@@ -1565,32 +1571,47 @@
                 playerThruster.scale.setScalar(0.85 + Math.random() * 0.3);
             }
 
-            // 上下矢印キーを押している間、視点を少しずつ変更する。
-            // キーを離した後も選んだ角度を維持し、カメラ追従の補間でなめらかに移動する。
+            // 矢印キーを押している間、上下・左右の視点を少しずつ変更する。
+            // キーを離した後も選んだ角度を維持し、追従補間でシームレスに移動する。
             const isViewUpPressed = keys['ArrowUp'] && !keys['ArrowDown'];
             const isViewDownPressed = keys['ArrowDown'] && !keys['ArrowUp'];
+            const isViewLeftPressed = keys['ArrowLeft'] && !keys['ArrowRight'];
+            const isViewRightPressed = keys['ArrowRight'] && !keys['ArrowLeft'];
+
             if (isViewUpPressed) {
                 cameraViewLevel = Math.min(CAMERA_VIEW_MAX, cameraViewLevel + CAMERA_VIEW_CHANGE_SPEED);
             } else if (isViewDownPressed) {
                 cameraViewLevel = Math.max(CAMERA_VIEW_MIN, cameraViewLevel - CAMERA_VIEW_CHANGE_SPEED);
             }
+            if (isViewLeftPressed) {
+                cameraHorizontalLevel = Math.max(CAMERA_VIEW_MIN, cameraHorizontalLevel - CAMERA_VIEW_CHANGE_SPEED);
+            } else if (isViewRightPressed) {
+                cameraHorizontalLevel = Math.min(CAMERA_VIEW_MAX, cameraHorizontalLevel + CAMERA_VIEW_CHANGE_SPEED);
+            }
 
             const cameraViewAmount = Math.abs(cameraViewLevel);
             const targetViewY = cameraViewLevel >= 0 ? 28.0 : 4.0;
             const targetViewDistance = cameraViewLevel >= 0 ? 8.5 : 18.0;
-            const targetCamX = player.position.x * 0.72;
+            const cameraDistance = THREE.MathUtils.lerp(12.0, targetViewDistance, cameraViewAmount);
             const targetCamY = THREE.MathUtils.lerp(14.5, targetViewY, cameraViewAmount);
-            const targetCamZ = player.position.z + THREE.MathUtils.lerp(12.0, targetViewDistance, cameraViewAmount);
-
-            camera.position.x += (targetCamX - camera.position.x) * 0.08;
-            camera.position.y += (targetCamY - camera.position.y) * 0.08;
-            camera.position.z += (targetCamZ - camera.position.z) * 0.08;
-
             const lookAheadDistance = THREE.MathUtils.lerp(
                 3.5,
                 cameraViewLevel >= 0 ? 5.5 : 2.0,
                 cameraViewAmount
             );
+
+            // 注視点の周囲を左右に回り込み、機体と進行方向を見失わない範囲で旋回する。
+            const cameraHorizontalAngle = cameraHorizontalLevel * CAMERA_HORIZONTAL_MAX_ANGLE;
+            const orbitCenterX = player.position.x * 0.72;
+            const orbitCenterZ = player.position.z - lookAheadDistance;
+            const orbitRadius = cameraDistance + lookAheadDistance;
+            const targetCamX = orbitCenterX + Math.sin(cameraHorizontalAngle) * orbitRadius;
+            const targetCamZ = orbitCenterZ + Math.cos(cameraHorizontalAngle) * orbitRadius;
+
+            camera.position.x += (targetCamX - camera.position.x) * 0.11;
+            camera.position.y += (targetCamY - camera.position.y) * 0.11;
+            camera.position.z += (targetCamZ - camera.position.z) * 0.11;
+
             const lookAtTarget = new THREE.Vector3(
                 player.position.x * 0.82, 
                 0, 
