@@ -48,7 +48,7 @@
     let vortexChargeFrames = 0;
     const VORTEX_MEDIUM_CHARGE = 45;
     const VORTEX_MAX_CHARGE = 120;
-    const VORTEX_SHOT_COOLDOWN = 10;
+    const VORTEX_SHOT_COOLDOWN = 4;
 
     let activeFighterConfig = {
         color: 0x00ffff,
