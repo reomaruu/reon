@@ -117,10 +117,10 @@
         redline: {
             color: 0xff3366,
             bulletColor: 0xff3366,
-            baseCooldown: 14, 
-            rapidCooldown: 4,  
-            bulletScale: 1.0,
-            damage: 0.9
+            baseCooldown: 12,
+            rapidCooldown: 4,
+            bulletScale: 0.9,
+            damage: 0.72
         },
         vortex: {
             color: 0x9900ff,
@@ -1005,6 +1005,22 @@
         cancelVortexCharge();
     }
 
+    function createRedlineSpreadBullet(startPos, direction, scale = 1.0) {
+        createBullet(
+            startPos,
+            direction,
+            activeFighterConfig.bulletColor,
+            22,
+            activeFighterConfig.bulletScale * scale,
+            false,
+            activeFighterConfig.damage
+        );
+        const spreadBullet = bullets[bullets.length - 1];
+        spreadBullet.kind = 'redlineSpread';
+        spreadBullet.life = 22;
+        spreadBullet.collisionRadius = 0.3;
+    }
+
     // 武器展開システム（VORTEX以外はオート射撃）
     function fireWeapons() {
         if (currentSelectedType === 'vortex' || shootCooldown > 0) return;
@@ -1017,10 +1033,34 @@
         pos.z -= 1.3;
 
         const isMulti = multishotTimer > 0;
+        const isRedline = currentSelectedType === 'redline';
         const isGaia = currentSelectedType === 'gaia';
 
-        // COBALT / REDLINE / HORIZON: 前方へのオート射撃
-        if (currentSelectedType === 'cobalt' || currentSelectedType === 'redline' || currentSelectedType === 'horizon') {
+        // REDLINE: 短射程の5方向スプレッド。近距離で複数弾を重ねるほど高DPSになる。
+        if (isRedline) {
+            const spreadAngles = [-0.40, -0.20, 0, 0.20, 0.40];
+            spreadAngles.forEach(angle => {
+                const direction = new THREE.Vector3(
+                    Math.sin(angle) * 0.62,
+                    0,
+                    -Math.cos(angle) * 0.62
+                );
+                createRedlineSpreadBullet(pos.clone(), direction);
+            });
+
+            if (isMulti) {
+                [-0.56, 0.56].forEach(angle => {
+                    const direction = new THREE.Vector3(
+                        Math.sin(angle) * 0.62,
+                        0,
+                        -Math.cos(angle) * 0.62
+                    );
+                    createRedlineSpreadBullet(pos.clone(), direction, 0.9);
+                });
+            }
+        }
+        // COBALT / HORIZON: 前方へのオート射撃
+        else if (currentSelectedType === 'cobalt' || currentSelectedType === 'horizon') {
             createBullet(pos, new THREE.Vector3(0, 0, -0.65), activeFighterConfig.bulletColor, 60, activeFighterConfig.bulletScale, false, activeFighterConfig.damage);
             
             if (isMulti) {
@@ -1582,7 +1622,7 @@
         updateBossUI(bossEntity);
 
         const bossHud = document.getElementById('boss-hud');
-        if (bossHud) bossHud.style.display = 'block';
+        if (bossHud) bossHud.style.display = 'flex';
         const bossTitle = document.getElementById('boss-title');
         if (bossTitle) bossTitle.innerText = `BOSS ${String(bossCount).padStart(2, '0')} — NEON WARDEN`;
 
@@ -1591,9 +1631,16 @@
 
     function updateBossUI(boss) {
         if (!boss || !boss.isBoss) return;
+        const hud = document.getElementById('boss-hud');
         const fill = document.getElementById('boss-hp-fill');
         const text = document.getElementById('boss-hp-text');
         const ratio = Math.max(0, boss.hp / boss.maxHp);
+
+        if (hud) {
+            hud.style.display = 'flex';
+            hud.style.visibility = 'visible';
+            hud.style.opacity = '1';
+        }
         if (fill) fill.style.width = `${ratio * 100}%`;
         if (text) text.innerText = `${Math.ceil(Math.max(0, boss.hp))} / ${boss.maxHp}`;
     }
@@ -2200,7 +2247,8 @@
                     } else if (
                         b.kind === 'vortexCharge' ||
                         b.kind === 'vortexMax' ||
-                        b.kind === 'vortexFragment'
+                        b.kind === 'vortexFragment' ||
+                        b.kind === 'redlineSpread'
                     ) {
                         b.life--;
                         b.mesh.rotation.x += 0.08;
@@ -2216,7 +2264,8 @@
                     b.kind === 'beam' ||
                     b.kind === 'vortexCharge' ||
                     b.kind === 'vortexMax' ||
-                    b.kind === 'vortexFragment'
+                    b.kind === 'vortexFragment' ||
+                    b.kind === 'redlineSpread'
                 ) && b.life <= 0;
                 if (specialExpired || Math.abs(relativeZ) > 90 || Math.abs(relativeX) > 90) {
                     scene.remove(b.mesh);
