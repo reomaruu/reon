@@ -6,6 +6,12 @@
     let items = []; 
     let particles = []; 
     let keys = {};
+
+    // 長時間プレイ時のメモリ・描画負荷を一定に保つ安全上限
+    const MAX_BULLETS = 240;
+    const MAX_ENEMIES = 64;
+    const MAX_ITEMS = 16;
+    const MAX_PARTICLES = 140;
     
     let isGameStarted = false; 
     let isGameOver = false;
@@ -30,8 +36,8 @@
 
     // スコアボス・一時戦闘アリーナ
     const BOSS_SCORE_INTERVAL = 5000;
-    const BOSS_ARENA_HALF_WIDTH = 18;
-    const BOSS_ARENA_HALF_DEPTH = 14;
+    const BOSS_ARENA_HALF_WIDTH = 24;
+    const BOSS_ARENA_HALF_DEPTH = 19;
     let nextBossScore = BOSS_SCORE_INTERVAL;
     let bossCount = 0;
     let bossActive = false;
@@ -204,6 +210,34 @@
 
     function safeSetItem(key, value) {
         try { localStorage.setItem(key, value); } catch (e) { backupStorage[key] = value; }
+    }
+
+    function disposeObject3D(object) {
+        if (!object) return;
+        if (object.parent) object.parent.remove(object);
+
+        const geometries = new Set();
+        const materials = new Set();
+        object.traverse(child => {
+            if (child.geometry) geometries.add(child.geometry);
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(material => materials.add(material));
+                } else {
+                    materials.add(child.material);
+                }
+            }
+        });
+
+        materials.forEach(material => {
+            Object.values(material).forEach(value => {
+                if (value && value.isTexture && typeof value.dispose === 'function') value.dispose();
+            });
+            if (typeof material.dispose === 'function') material.dispose();
+        });
+        geometries.forEach(geometry => {
+            if (typeof geometry.dispose === 'function') geometry.dispose();
+        });
     }
 
     // ランキングデータの読み込み
@@ -451,7 +485,7 @@
         isSurvivalMode = false;
 
         if (player) {
-            scene.remove(player);
+            disposeObject3D(player);
             player = null;
         }
 
@@ -475,7 +509,7 @@
         bossEntity = null;
         bossArenaCenter.set(0, 0, 0);
         if (bossArenaBoundary) {
-            scene.remove(bossArenaBoundary);
+            disposeObject3D(bossArenaBoundary);
             bossArenaBoundary = null;
         }
         const bossHud = document.getElementById('boss-hud');
@@ -525,10 +559,10 @@
         cameraViewLevel = 0;
         cameraHorizontalLevel = 0;
 
-        bullets.forEach(b => { if (b && b.mesh) scene.remove(b.mesh); });
-        enemies.forEach(e => { if (e && e.mesh) scene.remove(e.mesh); });
-        items.forEach(i => { if (i && i.mesh) scene.remove(i.mesh); });
-        particles.forEach(p => { if (p && p.mesh) scene.remove(p.mesh); });
+        bullets.forEach(b => { if (b && b.mesh) disposeObject3D(b.mesh); });
+        enemies.forEach(e => { if (e && e.mesh) disposeObject3D(e.mesh); });
+        items.forEach(i => { if (i && i.mesh) disposeObject3D(i.mesh); });
+        particles.forEach(p => { if (p && p.mesh) disposeObject3D(p.mesh); });
 
         bullets = [];
         enemies = [];
@@ -536,8 +570,8 @@
         particles = [];
 
         if (player) {
-            player.position.set(0, 0, 8);
-            player.rotation.set(0, 0, 0);
+            disposeObject3D(player);
+            player = null;
         }
 
         updateSubWeaponUI();
@@ -557,7 +591,7 @@
 
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.enabled = false;
         
         const container = document.getElementById('canvas-container');
         if (container) container.appendChild(renderer.domElement);
@@ -788,57 +822,54 @@
     }
 
     // ショット発射 (レーザーパルス CylinderGeometry に完全復元 ＋ 視認性向上のための少し大きなサイズ調整)
-    function createBullet(pos, vel, color, life, scale = 1.0, isEnemy = false, damage = 1) {
+    function createBullet(pos, vel, color, life, scale = 1.0, isEnemy = false, damage = 1, lightweight = false) {
+        if (bullets.length >= MAX_BULLETS) return null;
+
         let bMesh;
-
         if (isEnemy) {
-            // 敵の弾（SphereGeometry + 外側発光、こちらも少し大きく見えやすく）
-            const bGeo = new THREE.SphereGeometry(0.55, 8, 8);
-            const bMat = new THREE.MeshBasicMaterial({ 
-                color: 0xff0000,
+            const geometry = new THREE.SphereGeometry(0.48, 6, 6);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xff2233,
                 transparent: true,
-                opacity: 0.9
+                opacity: 0.88
             });
-            bMesh = new THREE.Mesh(bGeo, bMat);
-
-            const glowGeo = new THREE.SphereGeometry(0.85, 8, 8);
-            const glowMat = new THREE.MeshBasicMaterial({
-                color: 0xff3333,
+            bMesh = new THREE.Mesh(geometry, material);
+        } else if (lightweight) {
+            const geometry = new THREE.SphereGeometry(0.24 * scale, 6, 6);
+            const material = new THREE.MeshBasicMaterial({
+                color: color,
                 transparent: true,
-                opacity: 0.35,
-                wireframe: true
+                opacity: 0.92
             });
-            const glow = new THREE.Mesh(glowGeo, glowMat);
-            bMesh.add(glow);
+            bMesh = new THREE.Mesh(geometry, material);
         } else {
-            // 自機の弾 (CylinderGeometry に完全復元 ＆ 前より少し大きめの迫力サイズ)
             const width = 0.22 * scale;
             const length = 1.8 * scale;
-            const bGeo = new THREE.CylinderGeometry(width, width, length, 5);
-            
-            const bMat = new THREE.MeshBasicMaterial({ 
+            const geometry = new THREE.CylinderGeometry(width, width, length, 5);
+            const material = new THREE.MeshBasicMaterial({
                 color: color,
                 transparent: true,
                 opacity: 0.95
             });
-            bMesh = new THREE.Mesh(bGeo, bMat);
-            bMesh.rotation.x = Math.PI / 2; // 進行方向に寝かせる
+            bMesh = new THREE.Mesh(geometry, material);
+            bMesh.rotation.x = Math.PI / 2;
 
-            const outerGeo = new THREE.CylinderGeometry(width * 1.8, width * 1.8, length, 4);
-            const outerMat = new THREE.MeshBasicMaterial({
-                color: color,
-                transparent: true,
-                opacity: 0.3,
-                wireframe: true
-            });
-            const outer = new THREE.Mesh(outerGeo, outerMat);
+            const outer = new THREE.Mesh(
+                new THREE.CylinderGeometry(width * 1.65, width * 1.65, length, 4),
+                new THREE.MeshBasicMaterial({
+                    color: color,
+                    transparent: true,
+                    opacity: 0.22,
+                    wireframe: true
+                })
+            );
             bMesh.add(outer);
         }
 
         bMesh.position.copy(pos);
         scene.add(bMesh);
 
-        bullets.push({
+        const bulletData = {
             mesh: bMesh,
             velocity: vel,
             life: life,
@@ -847,7 +878,9 @@
             kind: isEnemy ? 'enemy' : 'main',
             color: isEnemy ? 0xff0000 : color,
             collisionRadius: isEnemy ? 0.4 : 0.3
-        });
+        };
+        bullets.push(bulletData);
+        return bulletData;
     }
 
     function setVortexCockpitCharge(ratio) {
@@ -904,6 +937,7 @@
     }
 
     function createVortexChargeProjectile(tier) {
+        if (bullets.length >= MAX_BULLETS) return;
         const settings = {
             normal: { damage: 1.0, radius: 0.48, speed: 0.68, life: 115 },
             medium: { damage: 4.0, radius: 0.82, speed: 0.58, life: 130 },
@@ -945,7 +979,7 @@
 
     function spawnVortexFragments(origin, color, ignoredEnemy) {
         const fragmentCount = 12;
-        for (let i = 0; i < fragmentCount; i++) {
+        for (let i = 0; i < fragmentCount && bullets.length < MAX_BULLETS; i++) {
             const angle = (Math.PI * 2 * i) / fragmentCount;
             const direction = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
             const geometry = new THREE.SphereGeometry(0.3, 10, 10);
@@ -1006,16 +1040,17 @@
     }
 
     function createRedlineSpreadBullet(startPos, direction, scale = 1.0) {
-        createBullet(
+        const spreadBullet = createBullet(
             startPos,
             direction,
             activeFighterConfig.bulletColor,
             22,
             activeFighterConfig.bulletScale * scale,
             false,
-            activeFighterConfig.damage
+            activeFighterConfig.damage,
+            true
         );
-        const spreadBullet = bullets[bullets.length - 1];
+        if (!spreadBullet) return;
         spreadBullet.kind = 'redlineSpread';
         spreadBullet.life = 22;
         spreadBullet.collisionRadius = 0.3;
@@ -1090,6 +1125,7 @@
     }
 
     function createHomingMissile(startPos, initialVelocity, target) {
+        if (bullets.length >= MAX_BULLETS) return;
         const group = new THREE.Group();
         const bodyMat = new THREE.MeshStandardMaterial({
             color: 0xff33cc,
@@ -1146,6 +1182,7 @@
     }
 
     function fireNovaBeam() {
+        if (bullets.length >= MAX_BULLETS) return;
         const beamLength = 34;
         const beamWidth = 1.8;
         const beamGroup = new THREE.Group();
@@ -1387,7 +1424,8 @@
         clearInterval(itemSpawnInterval);
 
         createExplosion(player.position, 0xff0055, 45);
-        scene.remove(player);
+        disposeObject3D(player);
+        player = null;
 
         document.getElementById('pause-btn').style.display = 'none';
         const bossHud = document.getElementById('boss-hud');
@@ -1517,7 +1555,7 @@
     }
 
     function createBossArenaBoundary() {
-        if (bossArenaBoundary) scene.remove(bossArenaBoundary);
+        if (bossArenaBoundary) disposeObject3D(bossArenaBoundary);
 
         const x = BOSS_ARENA_HALF_WIDTH;
         const z = BOSS_ARENA_HALF_DEPTH;
@@ -1540,7 +1578,7 @@
     function clearBossProjectiles() {
         for (let i = bullets.length - 1; i >= 0; i--) {
             if (!bullets[i].isEnemy) continue;
-            scene.remove(bullets[i].mesh);
+            disposeObject3D(bullets[i].mesh);
             bullets.splice(i, 1);
         }
     }
@@ -1555,14 +1593,14 @@
 
         // 通常敵と敵弾を一度片づけ、ボス戦へ明確に切り替える。
         enemies.forEach(enemy => {
-            if (enemy && enemy.mesh) scene.remove(enemy.mesh);
+            if (enemy && enemy.mesh) disposeObject3D(enemy.mesh);
         });
         enemies = [];
         clearBossProjectiles();
         createBossArenaBoundary();
 
         const bossMesh = new THREE.Group();
-        const coreGeometry = new THREE.IcosahedronGeometry(3.2, 1);
+        const coreGeometry = new THREE.IcosahedronGeometry(2.4, 1);
         const coreMaterial = new THREE.MeshStandardMaterial({
             color: 0x4a0010,
             emissive: 0xff1744,
@@ -1572,7 +1610,7 @@
         });
         bossMesh.add(new THREE.Mesh(coreGeometry, coreMaterial));
 
-        const shellGeometry = new THREE.TorusGeometry(4.25, 0.28, 10, 48);
+        const shellGeometry = new THREE.TorusGeometry(3.2, 0.22, 8, 32);
         const shellMaterial = new THREE.MeshBasicMaterial({
             color: 0xff3355,
             transparent: true,
@@ -1586,7 +1624,7 @@
         ringB.rotation.y = Math.PI / 2;
         bossMesh.add(ringB);
 
-        const wingGeometry = new THREE.BoxGeometry(8.5, 0.45, 1.5);
+        const wingGeometry = new THREE.BoxGeometry(6.2, 0.38, 1.2);
         const wingMaterial = new THREE.MeshStandardMaterial({
             color: 0x220008,
             emissive: 0xff0033,
@@ -1603,7 +1641,7 @@
         bossMesh.position.set(
             bossArenaCenter.x,
             0,
-            bossArenaCenter.z - BOSS_ARENA_HALF_DEPTH + 2
+            bossArenaCenter.z - BOSS_ARENA_HALF_DEPTH + 3
         );
         scene.add(bossMesh);
 
@@ -1616,7 +1654,10 @@
             speed: 0,
             shootTimer: 0,
             phase: 0,
-            contactCooldown: 0
+            contactCooldown: 0,
+            level: bossCount,
+            attackPatternIndex: 0,
+            spiralAngle: 0
         };
         enemies.push(bossEntity);
         updateBossUI(bossEntity);
@@ -1624,7 +1665,9 @@
         const bossHud = document.getElementById('boss-hud');
         if (bossHud) bossHud.style.display = 'flex';
         const bossTitle = document.getElementById('boss-title');
-        if (bossTitle) bossTitle.innerText = `BOSS ${String(bossCount).padStart(2, '0')} — NEON WARDEN`;
+        if (bossTitle) {
+            bossTitle.innerText = `BOSS ${String(bossCount).padStart(2, '0')} — NEON WARDEN / THREAT ${bossCount}`;
+        }
 
         showNotification(`WARNING — BOSS AT ${score.toLocaleString()} PTS`, '#ff1744');
     }
@@ -1645,49 +1688,103 @@
         if (text) text.innerText = `${Math.ceil(Math.max(0, boss.hp))} / ${boss.maxHp}`;
     }
 
-    function fireBossPattern(boss) {
-        const origin = boss.mesh.position.clone();
-        origin.z += 2.0;
-        const baseDirection = player.position.clone().sub(origin);
-        baseDirection.y = 0;
-        baseDirection.normalize();
+    function createBossBullet(origin, direction, speed, damage, scale = 1.0) {
+        if (bullets.length >= MAX_BULLETS) return;
+        const velocity = direction.clone().normalize().multiplyScalar(speed);
+        const bullet = createBullet(origin.clone(), velocity, 0xff1744, 180, scale, true);
+        if (bullet) bullet.bossDamage = damage;
+    }
 
-        let bulletSpeed = 0.23;
-        let bossDamage = 14;
+    function fireBossPattern(boss) {
+        const origin = boss.mesh.position.clone().add(new THREE.Vector3(0, 0, 1.6));
+        const aimedDirection = player.position.clone().sub(origin);
+        aimedDirection.y = 0;
+        aimedDirection.normalize();
+
+        const levelBonus = Math.min(8, Math.max(0, boss.level - 1));
+        let bulletSpeed = 0.22 + Math.min(0.08, levelBonus * 0.012);
+        let bossDamage = 13 + levelBonus;
         if (currentDifficulty === 'easy') {
-            bulletSpeed = 0.18;
-            bossDamage = 10;
+            bulletSpeed -= 0.045;
+            bossDamage -= 3;
         } else if (currentDifficulty === 'hard') {
-            bulletSpeed = 0.29;
-            bossDamage = 18;
+            bulletSpeed += 0.045;
+            bossDamage += 4;
         }
 
-        [-0.34, -0.17, 0, 0.17, 0.34].forEach(angle => {
-            const cos = Math.cos(angle);
-            const sin = Math.sin(angle);
-            const direction = new THREE.Vector3(
-                baseDirection.x * cos - baseDirection.z * sin,
-                0,
-                baseDirection.x * sin + baseDirection.z * cos
-            ).multiplyScalar(bulletSpeed);
-            createBullet(origin.clone(), direction, 0xff1744, 180, 1.15, true);
-            bullets[bullets.length - 1].bossDamage = bossDamage;
-        });
+        const availablePatterns = Math.min(3, boss.level);
+        const pattern = boss.attackPatternIndex % availablePatterns;
+        boss.attackPatternIndex++;
+
+        if (pattern === 0) {
+            // THREAT 1+: プレイヤーを狙う扇状弾。段階に応じて5→7→9発へ増える。
+            const fanCount = Math.min(9, 5 + Math.floor((boss.level - 1) / 2) * 2);
+            const totalSpread = 0.72 + Math.min(0.22, (boss.level - 1) * 0.035);
+            for (let i = 0; i < fanCount; i++) {
+                const normalized = fanCount === 1 ? 0 : i / (fanCount - 1);
+                const angle = -totalSpread / 2 + totalSpread * normalized;
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+                const direction = new THREE.Vector3(
+                    aimedDirection.x * cos - aimedDirection.z * sin,
+                    0,
+                    aimedDirection.x * sin + aimedDirection.z * cos
+                );
+                createBossBullet(origin, direction, bulletSpeed, bossDamage, 1.0);
+            }
+        } else if (pattern === 1) {
+            // THREAT 2+: 全周放射弾。スコア段階に応じて弾数が増える。
+            const radialCount = Math.min(14, 8 + boss.level * 2);
+            for (let i = 0; i < radialCount; i++) {
+                const angle = (Math.PI * 2 * i) / radialCount;
+                createBossBullet(
+                    origin,
+                    new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)),
+                    bulletSpeed * 0.88,
+                    Math.max(8, bossDamage - 3),
+                    0.9
+                );
+            }
+        } else {
+            // THREAT 3+: 発射角が毎回回転するスパイラル弾幕。
+            const spiralCount = Math.min(12, 8 + boss.level);
+            for (let i = 0; i < spiralCount; i++) {
+                const angle = boss.spiralAngle + (Math.PI * 2 * i) / spiralCount;
+                createBossBullet(
+                    origin,
+                    new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)),
+                    bulletSpeed * 0.95,
+                    Math.max(9, bossDamage - 2),
+                    0.95
+                );
+            }
+            boss.spiralAngle += 0.42;
+        }
     }
 
     function updateBoss(boss) {
-        boss.phase += 0.022;
-        boss.mesh.position.x = bossArenaCenter.x + Math.sin(boss.phase) * 13.5;
-        boss.mesh.position.z = bossArenaCenter.z - 11.5 + Math.sin(boss.phase * 0.55) * 2.0;
-        boss.mesh.rotation.y += 0.016;
+        const levelMotionBonus = Math.min(0.014, Math.max(0, boss.level - 1) * 0.002);
+        boss.phase += 0.019 + levelMotionBonus;
+        boss.mesh.position.x = bossArenaCenter.x + Math.sin(boss.phase) * 18.0;
+        const desiredBossZ =
+            bossArenaCenter.z - 14.0 +
+            Math.sin(boss.phase * 0.55) * (2.5 + Math.min(2.5, boss.level * 0.35));
+        boss.mesh.position.z = THREE.MathUtils.clamp(
+            desiredBossZ,
+            bossArenaCenter.z - BOSS_ARENA_HALF_DEPTH + 4,
+            bossArenaCenter.z - 4
+        );
+        boss.mesh.rotation.y += 0.014 + levelMotionBonus * 0.5;
         boss.mesh.rotation.z = Math.sin(boss.phase * 0.7) * 0.08;
 
         if (boss.contactCooldown > 0) boss.contactCooldown--;
         boss.shootTimer++;
 
-        let attackCooldown = 75;
-        if (currentDifficulty === 'easy') attackCooldown = 105;
-        if (currentDifficulty === 'hard') attackCooldown = 55;
+        let attackCooldown = 78;
+        if (currentDifficulty === 'easy') attackCooldown = 108;
+        if (currentDifficulty === 'hard') attackCooldown = 58;
+        attackCooldown = Math.max(34, attackCooldown - (boss.level - 1) * 6);
+
         if (boss.shootTimer >= attackCooldown) {
             boss.shootTimer = 0;
             fireBossPattern(boss);
@@ -1711,13 +1808,13 @@
     function defeatBoss(boss, bossIndex) {
         const defeatedPosition = boss.mesh.position.clone();
         createExplosion(defeatedPosition, 0xff1744, 70);
-        scene.remove(boss.mesh);
+        disposeObject3D(boss.mesh);
         enemies.splice(bossIndex, 1);
 
         bossActive = false;
         bossEntity = null;
         if (bossArenaBoundary) {
-            scene.remove(bossArenaBoundary);
+            disposeObject3D(bossArenaBoundary);
             bossArenaBoundary = null;
         }
         clearBossProjectiles();
@@ -1732,7 +1829,7 @@
 
     // 敵出現ロジック
     function spawnEnemy() {
-        if (!isGameStarted || isGameOver || isPaused || bossActive) return;
+        if (!isGameStarted || isGameOver || isPaused || bossActive || enemies.length >= MAX_ENEMIES) return;
 
         // 🌟サバイバルモード（耐久ミッション）の場合、敵の発生頻度を半分に制限して、精密な回避活動に専念しやすくします
         if (isSurvivalMode && Math.random() < 0.5) return;
@@ -1810,7 +1907,7 @@
 
     // 回復・パワーアップアイテム出現
     function spawnItem(presetPos = null, forcedType = null) {
-        if (!isGameStarted || isGameOver || isPaused) return;
+        if (!isGameStarted || isGameOver || isPaused || items.length >= MAX_ITEMS) return;
 
         const types = ['shield', 'rapidfire', 'multishot', 'invincible'];
         const chosenType = forcedType || types[Math.floor(Math.random() * types.length)];
@@ -1866,28 +1963,36 @@
 
     // 撃破パーティクル
     function createExplosion(pos, color, count = 12) {
-        for (let i = 0; i < count; i++) {
-            const size = 0.15 + Math.random() * 0.2;
-            const geo = new THREE.BoxGeometry(size, size, size);
-            const mat = new THREE.MeshBasicMaterial({
+        const availableSlots = Math.max(0, MAX_PARTICLES - particles.length);
+        const reducedCount = Math.min(
+            availableSlots,
+            18,
+            Math.max(2, Math.ceil(count * 0.35))
+        );
+
+        for (let i = 0; i < reducedCount; i++) {
+            const size = 0.13 + Math.random() * 0.16;
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshBasicMaterial({
                 color: color,
                 transparent: true,
-                opacity: 1.0
+                opacity: 0.9
             });
-            const pMesh = new THREE.Mesh(geo, mat);
-            pMesh.position.copy(pos);
+            const particleMesh = new THREE.Mesh(geometry, material);
+            particleMesh.position.copy(pos);
 
             const velocity = new THREE.Vector3(
-                (Math.random() - 0.5) * 0.4,
-                (Math.random() - 0.5) * 0.2,
-                (Math.random() - 0.5) * 0.4
+                (Math.random() - 0.5) * 0.34,
+                (Math.random() - 0.5) * 0.16,
+                (Math.random() - 0.5) * 0.34
             );
 
-            scene.add(pMesh);
+            scene.add(particleMesh);
             particles.push({
-                mesh: pMesh,
+                mesh: particleMesh,
                 velocity: velocity,
-                life: 35 + Math.floor(Math.random() * 15)
+                life: 22 + Math.floor(Math.random() * 12),
+                maxLife: 34
             });
         }
     }
@@ -1923,7 +2028,7 @@
         }
 
         const earnedScore = enemy.isElite ? 250 : 100;
-        scene.remove(enemy.mesh);
+        disposeObject3D(enemy.mesh);
         enemies.splice(enemyIndex, 1);
         addScore(earnedScore);
     }
@@ -1942,20 +2047,7 @@
             if (dist < 3.5) {
                 applyPowerup(item.type);
                 createExplosion(item.mesh.position, item.color, 15);
-                scene.remove(item.mesh);
-                
-                item.mesh.traverse(child => {
-                    if (child.isMesh) {
-                        if (child.geometry) child.geometry.dispose();
-                        if (child.material) {
-                            if (Array.isArray(child.material)) {
-                                child.material.forEach(m => m.dispose());
-                            } else {
-                                child.material.dispose();
-                            }
-                        }
-                    }
-                });
+                disposeObject3D(item.mesh);
                 
                 items.splice(i, 1);
             }
@@ -1975,14 +2067,14 @@
                     if (bullet.bossDamage) enemyDmg = bullet.bossDamage;
 
                     takeDamage(enemyDmg);
-                    scene.remove(bullet.mesh);
+                    disposeObject3D(bullet.mesh);
                     bullets.splice(b, 1);
                 }
             } else if (bullet.kind === 'beam') {
                 for (let e = enemies.length - 1; e >= 0; e--) {
                     const enemy = enemies[e];
                     if (!enemy || !enemy.mesh || bullet.hitEnemies.has(enemy)) continue;
-                    const enemyRadius = enemy.isBoss ? 4.4 : (enemy.isElite ? 1.6 : 0.9);
+                    const enemyRadius = enemy.isBoss ? 3.4 : (enemy.isElite ? 1.6 : 0.9);
                     const inBeamDepth = enemy.mesh.position.z <= bullet.beamStartZ + enemyRadius &&
                         enemy.mesh.position.z >= bullet.beamEndZ - enemyRadius;
                     const inBeamWidth = Math.abs(enemy.mesh.position.x - bullet.beamX) <
@@ -2005,11 +2097,11 @@
                     if (!enemy || !enemy.mesh || bullet.ignoreEnemy === enemy) continue;
                     
                     const dist = bullet.mesh.position.distanceTo(enemy.mesh.position);
-                    const enemyRadius = enemy.isBoss ? 4.4 : (enemy.isElite ? 1.6 : 0.9);
+                    const enemyRadius = enemy.isBoss ? 3.4 : (enemy.isElite ? 1.6 : 0.9);
 
                     if (dist < enemyRadius + (bullet.collisionRadius || 0.3)) {
                         const impactPos = bullet.mesh.position.clone();
-                        scene.remove(bullet.mesh);
+                        disposeObject3D(bullet.mesh);
                         bullets.splice(b, 1);
 
                         if (bullet.kind === 'vortexMax') {
@@ -2030,7 +2122,7 @@
             if (!enemy || !enemy.mesh) continue;
             
             const dist = player.position.distanceTo(enemy.mesh.position);
-            const enemyRadius = enemy.isBoss ? 4.2 : (enemy.isElite ? 1.4 : 0.8);
+            const enemyRadius = enemy.isBoss ? 3.2 : (enemy.isElite ? 1.4 : 0.8);
 
             if (dist < playerRadius + enemyRadius) {
                 if (enemy.isBoss) {
@@ -2055,7 +2147,7 @@
                 if (invincibleTimer > 0) {
                     createExplosion(enemy.mesh.position, 0xffd700, 20);
                     const earnedScore = enemy.isElite ? 350 : 100;
-                    scene.remove(enemy.mesh);
+                    disposeObject3D(enemy.mesh);
                     enemies.splice(e, 1);
                     addScore(earnedScore);
                 } else {
@@ -2065,7 +2157,7 @@
 
                     takeDamage(Math.round(contactDmg));
                     createExplosion(enemy.mesh.position, 0xff0000, 15);
-                    scene.remove(enemy.mesh);
+                    disposeObject3D(enemy.mesh);
                     enemies.splice(e, 1);
                 }
             }
@@ -2120,7 +2212,7 @@
             updatePowerUpUI();
 
             let isPrecisionTriggered = keys['ShiftRight'] || isMousePressing;
-            let speed = isPrecisionTriggered ? 0.10 : 0.22;
+            let speed = isPrecisionTriggered ? 0.10 : 0.27;
 
             let finalDirection = new THREE.Vector3();
 
@@ -2244,6 +2336,8 @@
                         }
                         b.life--;
                         b.mesh.lookAt(b.mesh.position.clone().add(b.velocity));
+                    } else if (b.kind === 'enemy') {
+                        b.life--;
                     } else if (
                         b.kind === 'vortexCharge' ||
                         b.kind === 'vortexMax' ||
@@ -2262,13 +2356,14 @@
                 const specialExpired = (
                     b.kind === 'missile' ||
                     b.kind === 'beam' ||
+                    b.kind === 'enemy' ||
                     b.kind === 'vortexCharge' ||
                     b.kind === 'vortexMax' ||
                     b.kind === 'vortexFragment' ||
                     b.kind === 'redlineSpread'
                 ) && b.life <= 0;
                 if (specialExpired || Math.abs(relativeZ) > 90 || Math.abs(relativeX) > 90) {
-                    scene.remove(b.mesh);
+                    disposeObject3D(b.mesh);
                     bullets.splice(i, 1);
                 }
             }
@@ -2297,7 +2392,7 @@
                         if (currentDifficulty === 'hard') bulletSpeed = 0.32;
 
                         const targetDir = player.position.clone().sub(enemyPos).normalize().multiplyScalar(bulletSpeed);
-                        createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), targetDir, 0xff0000, 10, 1.0, true);
+                        createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), targetDir, 0xff0000, 240, 1.0, true);
                     }
                 }
                 else if (isSurvivalMode) {
@@ -2305,12 +2400,12 @@
                     if (e.shootTimer > 130) {
                         e.shootTimer = 0;
                         const enemyPos = e.mesh.position.clone();
-                        createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), new THREE.Vector3(0, 0, 0.2), 0xffaa00, 10, 0.8, true);
+                        createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), new THREE.Vector3(0, 0, 0.2), 0xffaa00, 240, 0.8, true);
                     }
                 }
 
                 if (e.mesh.position.z > player.position.z + 28 || Math.abs(e.mesh.position.x - player.position.x) > 80) {
-                    scene.remove(e.mesh);
+                    disposeObject3D(e.mesh);
                     enemies.splice(i, 1);
                 }
             }
@@ -2322,7 +2417,7 @@
                 item.mesh.rotation.y += 0.03;
 
                 if (item.mesh.position.z > player.position.z + 28 || Math.abs(item.mesh.position.x - player.position.x) > 80) {
-                    scene.remove(item.mesh);
+                    disposeObject3D(item.mesh);
                     items.splice(i, 1);
                 }
             }
@@ -2337,10 +2432,10 @@
             const p = particles[i];
             p.mesh.position.add(p.velocity);
             p.life--;
-            p.mesh.material.opacity = p.life / 50;
+            p.mesh.material.opacity = Math.max(0, Math.min(1, p.life / (p.maxLife || 34)));
 
             if (p.life <= 0) {
-                scene.remove(p.mesh);
+                disposeObject3D(p.mesh);
                 particles.splice(i, 1);
             }
         }
