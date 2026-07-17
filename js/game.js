@@ -11,6 +11,12 @@
     let isGameOver = false;
     let isPaused = false;
 
+    // 上下矢印キーで連続調整するカメラ視点（-1: 低い視点 / 0: 標準 / 1: 俯瞰）
+    let cameraViewLevel = 0;
+    const CAMERA_VIEW_MIN = -1;
+    const CAMERA_VIEW_MAX = 1;
+    const CAMERA_VIEW_CHANGE_SPEED = 0.012;
+
     // 難易度設定
     let currentDifficulty = 'normal'; // easy, normal, hard
 
@@ -458,6 +464,9 @@
         shieldOverheatTimer = 0;
         isSubShieldActive = false;
         keys['Space'] = false;
+        keys['ArrowUp'] = false;
+        keys['ArrowDown'] = false;
+        cameraViewLevel = 0;
 
         bullets.forEach(b => { if (b && b.mesh) scene.remove(b.mesh); });
         enemies.forEach(e => { if (e && e.mesh) scene.remove(e.mesh); });
@@ -510,7 +519,7 @@
         scene.add(gridHelper);
 
         window.addEventListener('keydown', (e) => { 
-            if (e.code === 'Space' && isGameStarted && !isGameOver) {
+            if ((e.code === 'Space' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
                 e.preventDefault();
             }
             keys[e.code] = true; 
@@ -1527,8 +1536,8 @@
 
             if (keys['KeyA'] || keys['ArrowLeft']) finalDirection.x = -1;
             if (keys['KeyD'] || keys['ArrowRight']) finalDirection.x = 1;
-            if (keys['KeyW'] || keys['ArrowUp']) finalDirection.z = -1;
-            if (keys['KeyS'] || keys['ArrowDown']) finalDirection.z = 1;
+            if (keys['KeyW']) finalDirection.z = -1;
+            if (keys['KeyS']) finalDirection.z = 1;
 
             if (joystickActive && moveDirection.lengthSq() > 0) {
                 finalDirection.copy(moveDirection);
@@ -1556,18 +1565,36 @@
                 playerThruster.scale.setScalar(0.85 + Math.random() * 0.3);
             }
 
-            const targetCamX = player.position.x * 0.72;              
-            const targetCamZ = player.position.z + 12.0;             
-            const targetCamY = 14.5;                                 
+            // 上下矢印キーを押している間、視点を少しずつ変更する。
+            // キーを離した後も選んだ角度を維持し、カメラ追従の補間でなめらかに移動する。
+            const isViewUpPressed = keys['ArrowUp'] && !keys['ArrowDown'];
+            const isViewDownPressed = keys['ArrowDown'] && !keys['ArrowUp'];
+            if (isViewUpPressed) {
+                cameraViewLevel = Math.min(CAMERA_VIEW_MAX, cameraViewLevel + CAMERA_VIEW_CHANGE_SPEED);
+            } else if (isViewDownPressed) {
+                cameraViewLevel = Math.max(CAMERA_VIEW_MIN, cameraViewLevel - CAMERA_VIEW_CHANGE_SPEED);
+            }
+
+            const cameraViewAmount = Math.abs(cameraViewLevel);
+            const targetViewY = cameraViewLevel >= 0 ? 28.0 : 4.0;
+            const targetViewDistance = cameraViewLevel >= 0 ? 8.5 : 18.0;
+            const targetCamX = player.position.x * 0.72;
+            const targetCamY = THREE.MathUtils.lerp(14.5, targetViewY, cameraViewAmount);
+            const targetCamZ = player.position.z + THREE.MathUtils.lerp(12.0, targetViewDistance, cameraViewAmount);
 
             camera.position.x += (targetCamX - camera.position.x) * 0.08;
             camera.position.y += (targetCamY - camera.position.y) * 0.08;
             camera.position.z += (targetCamZ - camera.position.z) * 0.08;
 
+            const lookAheadDistance = THREE.MathUtils.lerp(
+                3.5,
+                cameraViewLevel >= 0 ? 5.5 : 2.0,
+                cameraViewAmount
+            );
             const lookAtTarget = new THREE.Vector3(
                 player.position.x * 0.82, 
                 0, 
-                player.position.z - 3.5
+                player.position.z - lookAheadDistance
             );
             camera.lookAt(lookAtTarget);
 
