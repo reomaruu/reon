@@ -42,7 +42,19 @@
 
     // 操作用
     let isMousePressing = false;       
-    let shootCooldown = 0;             
+    let shootCooldown = 0;
+
+    // クイックブースト状態（60fps基準）
+    let quickBoostRequested = false;
+    let quickBoostFrames = 0;
+    let boostEnergy = 100;
+    let boostLockoutTimer = 0;
+    const quickBoostDirection = new THREE.Vector3();
+    const QUICK_BOOST_ENERGY_COST = 25;
+    const QUICK_BOOST_DURATION = 9;
+    const QUICK_BOOST_SPEED = 0.75;
+    const QUICK_BOOST_LOCKOUT = 210;
+    const QUICK_BOOST_RECHARGE_PER_FRAME = 0.22;
 
     // サブウェポン状態（60fps基準）
     let subWeaponCooldown = 0;
@@ -466,7 +478,13 @@
         shieldGauge = 100;
         shieldOverheatTimer = 0;
         isSubShieldActive = false;
+        boostEnergy = 100;
+        boostLockoutTimer = 0;
+        quickBoostRequested = false;
+        quickBoostFrames = 0;
+        quickBoostDirection.set(0, 0, 0);
         keys['Space'] = false;
+        keys['ShiftLeft'] = false;
         keys['ArrowUp'] = false;
         keys['ArrowDown'] = false;
         keys['ArrowLeft'] = false;
@@ -490,6 +508,7 @@
         }
 
         updateSubWeaponUI();
+        updateBoostUI();
     }
 
     // 3Dシーン初期化
@@ -525,12 +544,15 @@
         scene.add(gridHelper);
 
         window.addEventListener('keydown', (e) => { 
-            if ((e.code === 'Space' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
+            if ((e.code === 'Space' || e.code === 'ShiftLeft' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
                 e.preventDefault();
             }
             keys[e.code] = true; 
             if (e.code === 'Space' && !e.repeat && currentSelectedSubWeapon !== 'shield') {
                 activateSubWeapon();
+            }
+            if (e.code === 'ShiftLeft' && !e.repeat && isGameStarted && !isGameOver && !isPaused) {
+                quickBoostRequested = true;
             }
             if (e.code === 'KeyP' || e.code === 'Escape') {
                 togglePause();
@@ -552,6 +574,9 @@
             keys = {};
             isMousePressing = false;
             isSubShieldActive = false;
+            quickBoostRequested = false;
+            quickBoostFrames = 0;
+            quickBoostDirection.set(0, 0, 0);
             joystickActive = false;
             if (knob) {
                 knob.style.transform = 'translate(0px, 0px)';
@@ -1023,6 +1048,68 @@
             } else {
                 statusEl.innerText = 'READY — PRESS SPACE';
                 statusEl.style.color = '#ffffff';
+            }
+        }
+    }
+
+    function tryQuickBoost(direction) {
+        if (direction.lengthSq() === 0 || boostLockoutTimer > 0 || boostEnergy < QUICK_BOOST_ENERGY_COST) {
+            return;
+        }
+
+        quickBoostDirection.copy(direction).normalize();
+        quickBoostFrames = QUICK_BOOST_DURATION;
+        boostEnergy = Math.max(0, boostEnergy - QUICK_BOOST_ENERGY_COST);
+
+        if (boostEnergy <= 0) {
+            boostLockoutTimer = QUICK_BOOST_LOCKOUT;
+            showNotification('QUICK BOOST OVERHEAT', '#ff3366');
+        }
+
+        updateBoostUI();
+    }
+
+    function updateQuickBoostState() {
+        if (boostLockoutTimer > 0) {
+            boostLockoutTimer--;
+            if (boostLockoutTimer === 0) {
+                boostEnergy = 100;
+                showNotification('QUICK BOOST RECHARGED', '#ffd740');
+            }
+        } else if (quickBoostFrames <= 0 && boostEnergy < 100) {
+            boostEnergy = Math.min(100, boostEnergy + QUICK_BOOST_RECHARGE_PER_FRAME);
+        }
+
+        updateBoostUI();
+    }
+
+    function updateBoostUI() {
+        const fillEl = document.getElementById('boost-gauge-fill');
+        const statusEl = document.getElementById('boost-status');
+        if (!fillEl || !statusEl) return;
+
+        fillEl.style.width = `${boostEnergy}%`;
+
+        if (boostLockoutTimer > 0) {
+            fillEl.style.background = 'linear-gradient(90deg, #ff1744, #ff6b6b)';
+            fillEl.style.boxShadow = '0 0 10px #ff1744';
+            statusEl.innerText = `OVERHEAT ${(boostLockoutTimer / 60).toFixed(1)}s`;
+            statusEl.style.color = '#ff5577';
+        } else {
+            fillEl.style.background = 'linear-gradient(90deg, #ff8a00, #fff36b)';
+            fillEl.style.boxShadow = '0 0 10px #ffd740';
+
+            if (quickBoostFrames > 0) {
+                statusEl.innerText = `BOOSTING — ${Math.ceil(boostEnergy)}%`;
+                statusEl.style.color = '#fff36b';
+            } else if (boostEnergy >= QUICK_BOOST_ENERGY_COST) {
+                statusEl.innerText = boostEnergy >= 99.9
+                    ? 'READY — LEFT SHIFT'
+                    : `READY ${Math.ceil(boostEnergy)}% — LEFT SHIFT`;
+                statusEl.style.color = '#ffffff';
+            } else {
+                statusEl.innerText = `RECHARGING ${Math.ceil(boostEnergy)}%`;
+                statusEl.style.color = '#aaaaaa';
             }
         }
     }
@@ -1516,6 +1603,7 @@
             if (multishotTimer > 0) multishotTimer--;
             if (rapidfireTimer > 0) rapidfireTimer--;
             updateSubWeaponState();
+            updateQuickBoostState();
 
             if (barrierVisual) {
                 barrierVisual.material.opacity = (shieldStrength > 0) ? 0.25 + Math.sin(Date.now() * 0.01) * 0.1 : 0.0;
@@ -1535,15 +1623,15 @@
 
             updatePowerUpUI();
 
-            let isPrecisionTriggered = keys['ShiftLeft'] || keys['ShiftRight'] || isMousePressing;
+            let isPrecisionTriggered = keys['ShiftRight'] || isMousePressing;
             let speed = isPrecisionTriggered ? 0.10 : 0.22;
 
             let finalDirection = new THREE.Vector3();
 
-            if (keys['KeyA']) finalDirection.x = -1;
-            if (keys['KeyD']) finalDirection.x = 1;
-            if (keys['KeyW']) finalDirection.z = -1;
-            if (keys['KeyS']) finalDirection.z = 1;
+            if (keys['KeyA']) finalDirection.x -= 1;
+            if (keys['KeyD']) finalDirection.x += 1;
+            if (keys['KeyW']) finalDirection.z -= 1;
+            if (keys['KeyS']) finalDirection.z += 1;
 
             if (joystickActive && moveDirection.lengthSq() > 0) {
                 finalDirection.copy(moveDirection);
@@ -1552,7 +1640,20 @@
             }
 
             finalDirection.normalize();
+
+            if (quickBoostRequested) {
+                tryQuickBoost(finalDirection);
+                quickBoostRequested = false;
+            }
+
             player.position.addScaledVector(finalDirection, speed);
+
+            if (quickBoostFrames > 0) {
+                const boostProgress = quickBoostFrames / QUICK_BOOST_DURATION;
+                const boostStep = QUICK_BOOST_SPEED * (0.45 + 0.55 * boostProgress);
+                player.position.addScaledVector(quickBoostDirection, boostStep);
+                quickBoostFrames--;
+            }
 
             player.rotation.z = -finalDirection.x * 0.35;
             player.rotation.x = finalDirection.z * 0.15;
@@ -1568,7 +1669,8 @@
             }
 
             if (playerThruster) {
-                playerThruster.scale.setScalar(0.85 + Math.random() * 0.3);
+                const boostFlare = quickBoostFrames > 0 ? 1.9 : 1.0;
+                playerThruster.scale.setScalar((0.85 + Math.random() * 0.3) * boostFlare);
             }
 
             // 矢印キーを押している間、上下・左右の視点を少しずつ変更する。
@@ -1602,7 +1704,7 @@
 
             // 注視点の周囲を左右に回り込み、機体と進行方向を見失わない範囲で旋回する。
             const cameraHorizontalAngle = cameraHorizontalLevel * CAMERA_HORIZONTAL_MAX_ANGLE;
-            const orbitCenterX = player.position.x * 0.72;
+            const orbitCenterX = player.position.x;
             const orbitCenterZ = player.position.z - lookAheadDistance;
             const orbitRadius = cameraDistance + lookAheadDistance;
             const targetCamX = orbitCenterX + Math.sin(cameraHorizontalAngle) * orbitRadius;
@@ -1613,7 +1715,7 @@
             camera.position.z += (targetCamZ - camera.position.z) * 0.11;
 
             const lookAtTarget = new THREE.Vector3(
-                player.position.x * 0.82, 
+                player.position.x, 
                 0, 
                 player.position.z - lookAheadDistance
             );
