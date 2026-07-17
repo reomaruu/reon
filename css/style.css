@@ -726,16 +726,27 @@
         }
 
         #boss-hud {
-            position: absolute;
-            top: 22px;
+            position: fixed;
+            top: 14px;
             left: 50%;
             transform: translateX(-50%);
-            width: min(520px, 58vw);
+            width: min(540px, 58vw);
+            box-sizing: border-box;
+            padding: 9px 14px 8px;
+            flex-direction: column;
+            align-items: stretch;
             color: #ffffff;
             text-align: center;
             pointer-events: none;
-            z-index: 118;
+            z-index: 300;
+            visibility: visible;
+            opacity: 1;
             display: none;
+            background: linear-gradient(180deg, rgba(35, 0, 8, 0.94), rgba(8, 0, 4, 0.82));
+            border: 1px solid rgba(255, 51, 85, 0.7);
+            border-radius: 10px;
+            box-shadow: 0 0 24px rgba(255, 23, 68, 0.45);
+            backdrop-filter: blur(6px);
         }
 
         #boss-title {
@@ -775,8 +786,9 @@
 
         @media (max-width: 700px) {
             #boss-hud {
-                top: 72px;
-                width: 64vw;
+                top: 68px;
+                width: calc(100vw - 24px);
+                max-width: 520px;
             }
             #boss-title {
                 font-size: 10px;
