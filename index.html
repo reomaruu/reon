@@ -16,7 +16,7 @@
     </div>
     <div class="title-menu">
         <button class="neon-btn" onclick="openCharSelectFromTitle()">SYSTEM START</button>
-        <div class="version">VER 1.7.1 - 4-WAY CAMERA</div>
+        <div class="version">VER 1.8.0 - QUICK BOOST</div>
     </div>
 </div>
 
@@ -34,7 +34,8 @@
                         ・<strong>視点変更</strong>: [↑ / ↓キー]で俯瞰／低い視点、[← / →キー]で左右へなめらかに旋回<br>
                         ・<strong>自動射撃</strong>: 自動で弾が出続けます！<br>
                         ・<strong>サブウェポン</strong>: [Spaceキー]で発動（シールドのみ長押し）<br>
-                        ・<strong>精密移動</strong>: [Shiftキー] / [画面クリック長押し]で低速移動に切り替わります。
+                        ・<strong>クイックブースト</strong>: 移動中に[左Shiftキー]を押すと、その方向へ高速移動（エネルギーを25%消費）<br>
+                        ・<strong>精密移動</strong>: [右Shiftキー] / [画面クリック長押し]で低速移動に切り替わります。
                     </p>
                 </div>
                 <div class="control-box">
@@ -207,6 +208,12 @@
 </div>
 
 <div id="hud">
+    <div id="boost-hud">
+        <div class="hud-label">Quick Boost Energy</div>
+        <div id="boost-gauge-container"><div id="boost-gauge-fill"></div></div>
+        <div id="boost-status">READY — LEFT SHIFT</div>
+    </div>
+
     <div id="standard-score-hud">
         <div class="hud-label">Score</div>
         <div id="score-container"><span id="score-text">0</span></div>
@@ -280,7 +287,7 @@
 </div>
 
 <div id="instructions">
-    【PC】WASD移動 ・ [矢印キー]上下／左右視点変更 ・ オート連射 ・ [Space]サブウェポン ・ [Shift]精密移動<br>
+    【PC】WASD移動 ・ [矢印キー]視点変更 ・ [左Shift]クイックブースト ・ [右Shift]精密移動 ・ [Space]サブウェポン<br>
     【スマホ】左下のジョイスティック移動 ・ オート連射（[画面長押し]で精密低速移動になります）
 </div>
 
