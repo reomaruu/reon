@@ -97,11 +97,10 @@
     const QUICK_BOOST_LOCKOUT = 210;
     const QUICK_BOOST_RECHARGE_PER_FRAME = 0.22;
 
-    // Mキー・オーバードブースト（60fps基準）
-    let overdriveFrames = 0;
-    let overdriveCooldown = 0;
-    const OVERDRIVE_DURATION = 180;
-    const OVERDRIVE_COOLDOWN = 480;
+    // Mキー・オーバードブースト：クイックブーストと同じエネルギーを継続消費
+    let isOverdriveActive = false;
+    const OVERDRIVE_MIN_ENERGY = 25;
+    const OVERDRIVE_DRAIN_PER_FRAME = 0.55;
     const OVERDRIVE_MOVE_MULTIPLIER = 1.45;
     const OVERDRIVE_FORWARD_MULTIPLIER = 0.55;
     const OVERDRIVE_FIRE_COOLDOWN_MULTIPLIER = 0.46;
@@ -635,8 +634,7 @@
         quickBoostRequested = false;
         quickBoostFrames = 0;
         quickBoostDirection.set(0, 0, 0);
-        overdriveFrames = 0;
-        overdriveCooldown = 0;
+        isOverdriveActive = false;
         keys['Space'] = false;
         keys['ShiftLeft'] = false;
         keys['KeyM'] = false;
@@ -666,7 +664,6 @@
 
         updateSubWeaponUI();
         updateBoostUI();
-        updateOverdriveUI();
         updateVortexChargeUI();
     }
 
@@ -714,7 +711,7 @@
                 quickBoostRequested = true;
             }
             if (e.code === 'KeyM' && !e.repeat && isGameStarted && !isGameOver && !isPaused) {
-                activateOverdrive();
+                toggleOverdrive();
             }
             if (
                 e.code === 'KeyN' &&
@@ -1037,7 +1034,7 @@
         }
 
         if (isVortexCharging) {
-            const chargeStep = overdriveFrames > 0 ? OVERDRIVE_CHARGE_RATE : 1;
+            const chargeStep = isOverdriveActive ? OVERDRIVE_CHARGE_RATE : 1;
             vortexChargeFrames = Math.min(VORTEX_MAX_CHARGE, vortexChargeFrames + chargeStep);
             setVortexCockpitCharge(vortexChargeFrames / VORTEX_MAX_CHARGE);
         }
@@ -1195,7 +1192,7 @@
 
         const isRapid = rapidfireTimer > 0;
         const cooldownVal = isRapid ? activeFighterConfig.rapidCooldown : activeFighterConfig.baseCooldown;
-        const overdriveCooldownMultiplier = overdriveFrames > 0
+        const overdriveCooldownMultiplier = isOverdriveActive
             ? OVERDRIVE_FIRE_COOLDOWN_MULTIPLIER
             : 1;
         shootCooldown = Math.max(2, Math.round(cooldownVal * overdriveCooldownMultiplier));
@@ -1518,60 +1515,27 @@
         }
     }
 
-    function activateOverdrive() {
-        if (overdriveFrames > 0 || overdriveCooldown > 0 || !player) return;
+    function toggleOverdrive() {
+        if (!player || boostLockoutTimer > 0) return;
 
-        overdriveFrames = OVERDRIVE_DURATION;
+        if (isOverdriveActive) {
+            isOverdriveActive = false;
+            showNotification('OVERDRIVE DISENGAGED', '#66eaff');
+            updateBoostUI();
+            return;
+        }
+
+        if (boostEnergy < OVERDRIVE_MIN_ENERGY) {
+            showNotification('BOOST ENERGY TOO LOW', '#ff9d33');
+            return;
+        }
+
+        isOverdriveActive = true;
         quickBoostRequested = false;
         quickBoostFrames = 0;
         shootCooldown = Math.min(shootCooldown, 3);
         showNotification('OVERDRIVE BOOST — FIRST PERSON', '#66eaff');
-        updateOverdriveUI();
-    }
-
-    function updateOverdriveState() {
-        if (overdriveFrames > 0) {
-            overdriveFrames--;
-            if (overdriveFrames === 0) {
-                overdriveCooldown = OVERDRIVE_COOLDOWN;
-                showNotification('OVERDRIVE COOLING', '#ff9d33');
-            }
-        } else if (overdriveCooldown > 0) {
-            overdriveCooldown--;
-            if (overdriveCooldown === 0) {
-                showNotification('OVERDRIVE READY', '#66eaff');
-            }
-        }
-
-        updateOverdriveUI();
-    }
-
-    function updateOverdriveUI() {
-        const fillEl = document.getElementById('overdrive-gauge-fill');
-        const statusEl = document.getElementById('overdrive-status');
-        if (!fillEl || !statusEl) return;
-
-        if (overdriveFrames > 0) {
-            const activeRatio = overdriveFrames / OVERDRIVE_DURATION;
-            fillEl.style.width = `${activeRatio * 100}%`;
-            fillEl.style.background = 'linear-gradient(90deg, #00aaff, #ffffff)';
-            fillEl.style.boxShadow = '0 0 12px #66eaff';
-            statusEl.innerText = `ACTIVE ${(overdriveFrames / 60).toFixed(1)}s — FIRE RATE ×2.2`;
-            statusEl.style.color = '#aaf7ff';
-        } else if (overdriveCooldown > 0) {
-            const readyRatio = 1 - overdriveCooldown / OVERDRIVE_COOLDOWN;
-            fillEl.style.width = `${readyRatio * 100}%`;
-            fillEl.style.background = 'linear-gradient(90deg, #ff6b22, #ffd166)';
-            fillEl.style.boxShadow = '0 0 8px #ff8a33';
-            statusEl.innerText = `COOLDOWN ${(overdriveCooldown / 60).toFixed(1)}s`;
-            statusEl.style.color = '#ffbb77';
-        } else {
-            fillEl.style.width = '100%';
-            fillEl.style.background = 'linear-gradient(90deg, #0088ff, #66eaff)';
-            fillEl.style.boxShadow = '0 0 10px #00aaff';
-            statusEl.innerText = 'READY — PRESS M';
-            statusEl.style.color = '#ffffff';
-        }
+        updateBoostUI();
     }
 
     function tryQuickBoost(direction) {
@@ -1579,7 +1543,7 @@
             direction.lengthSq() === 0 ||
             boostLockoutTimer > 0 ||
             boostEnergy < QUICK_BOOST_ENERGY_COST ||
-            overdriveFrames > 0
+            isOverdriveActive
         ) {
             return;
         }
@@ -1598,10 +1562,18 @@
 
     function updateQuickBoostState() {
         if (boostLockoutTimer > 0) {
+            isOverdriveActive = false;
             boostLockoutTimer--;
             if (boostLockoutTimer === 0) {
                 boostEnergy = 100;
-                showNotification('QUICK BOOST RECHARGED', '#ffd740');
+                showNotification('BOOST ENERGY RECHARGED', '#ffd740');
+            }
+        } else if (isOverdriveActive) {
+            boostEnergy = Math.max(0, boostEnergy - OVERDRIVE_DRAIN_PER_FRAME);
+            if (boostEnergy <= 0) {
+                isOverdriveActive = false;
+                boostLockoutTimer = QUICK_BOOST_LOCKOUT;
+                showNotification('BOOST SYSTEM OVERHEAT', '#ff3366');
             }
         } else if (quickBoostFrames <= 0 && boostEnergy < 100) {
             boostEnergy = Math.min(100, boostEnergy + QUICK_BOOST_RECHARGE_PER_FRAME);
@@ -1622,17 +1594,22 @@
             fillEl.style.boxShadow = '0 0 10px #ff1744';
             statusEl.innerText = `OVERHEAT ${(boostLockoutTimer / 60).toFixed(1)}s`;
             statusEl.style.color = '#ff5577';
+        } else if (isOverdriveActive) {
+            fillEl.style.background = 'linear-gradient(90deg, #0088ff, #ffffff)';
+            fillEl.style.boxShadow = '0 0 12px #66eaff';
+            statusEl.innerText = `OVERDRIVE ACTIVE — ${Math.ceil(boostEnergy)}%`;
+            statusEl.style.color = '#aaf7ff';
         } else {
             fillEl.style.background = 'linear-gradient(90deg, #ff8a00, #fff36b)';
             fillEl.style.boxShadow = '0 0 10px #ffd740';
 
             if (quickBoostFrames > 0) {
-                statusEl.innerText = `BOOSTING — ${Math.ceil(boostEnergy)}%`;
+                statusEl.innerText = `QUICK BOOST — ${Math.ceil(boostEnergy)}%`;
                 statusEl.style.color = '#fff36b';
             } else if (boostEnergy >= QUICK_BOOST_ENERGY_COST) {
                 statusEl.innerText = boostEnergy >= 99.9
-                    ? 'READY — LEFT SHIFT'
-                    : `READY ${Math.ceil(boostEnergy)}% — LEFT SHIFT`;
+                    ? 'READY — SHIFT / M'
+                    : `READY ${Math.ceil(boostEnergy)}% — SHIFT / M`;
                 statusEl.style.color = '#ffffff';
             } else {
                 statusEl.innerText = `RECHARGING ${Math.ceil(boostEnergy)}%`;
@@ -2459,7 +2436,6 @@
             if (rapidfireTimer > 0) rapidfireTimer--;
             updateSubWeaponState();
             updateQuickBoostState();
-            updateOverdriveState();
             updateVortexChargeState();
 
             if (barrierVisual) {
@@ -2484,7 +2460,7 @@
             const normalSpeed = activeChassisConfig.moveSpeed || 0.32;
             const precisionSpeed = activeChassisConfig.precisionSpeed || 0.10;
             let speed = isPrecisionTriggered ? precisionSpeed : normalSpeed;
-            if (overdriveFrames > 0) speed *= OVERDRIVE_MOVE_MULTIPLIER;
+            if (isOverdriveActive) speed *= OVERDRIVE_MOVE_MULTIPLIER;
 
             let finalDirection = new THREE.Vector3();
 
@@ -2507,7 +2483,7 @@
             }
 
             player.position.addScaledVector(finalDirection, speed);
-            if (overdriveFrames > 0) {
+            if (isOverdriveActive) {
                 player.position.z -= normalSpeed * OVERDRIVE_FORWARD_MULTIPLIER;
             }
 
@@ -2536,7 +2512,7 @@
             }
 
             if (playerThruster) {
-                const boostFlare = overdriveFrames > 0 ? 2.7 : (quickBoostFrames > 0 ? 1.9 : 1.0);
+                const boostFlare = isOverdriveActive ? 2.7 : (quickBoostFrames > 0 ? 1.9 : 1.0);
                 playerThruster.scale.setScalar((0.85 + Math.random() * 0.3) * boostFlare);
             }
 
@@ -2558,13 +2534,13 @@
                 cameraHorizontalLevel = Math.min(CAMERA_VIEW_MAX, cameraHorizontalLevel + CAMERA_VIEW_CHANGE_SPEED);
             }
 
-            const targetFov = overdriveFrames > 0 ? OVERDRIVE_FOV : DEFAULT_CAMERA_FOV;
+            const targetFov = isOverdriveActive ? OVERDRIVE_FOV : DEFAULT_CAMERA_FOV;
             if (Math.abs(camera.fov - targetFov) > 0.02) {
                 camera.fov += (targetFov - camera.fov) * 0.16;
                 camera.updateProjectionMatrix();
             }
 
-            if (overdriveFrames > 0) {
+            if (isOverdriveActive) {
                 // コックピット直上へ寄せ、進行方向を見通す一人称オーバードブースト視点
                 const firstPersonPosition = new THREE.Vector3(
                     player.position.x,
