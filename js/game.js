@@ -1558,8 +1558,8 @@
             spawnRate = 1200;
             itemRate = 5000; // イージーはアイテム多め
         } else if (currentDifficulty === 'hard') {
-            spawnRate = 480;
-            itemRate = 9000; // ハードは厳しめ
+            spawnRate = 570;
+            itemRate = 7500; // ハードでも回復チャンスを確保
         }
 
         spawnInterval = setInterval(spawnEnemy, spawnRate);
@@ -1696,7 +1696,7 @@
 
         let baseHp = 80;
         if (currentDifficulty === 'easy') baseHp = 55;
-        if (currentDifficulty === 'hard') baseHp = 115;
+        if (currentDifficulty === 'hard') baseHp = 100;
         const maxHp = baseHp + (bossCount - 1) * 20;
 
         bossMesh.position.set(
@@ -1769,8 +1769,8 @@
             bulletSpeed -= 0.045;
             bossDamage -= 3;
         } else if (currentDifficulty === 'hard') {
-            bulletSpeed += 0.045;
-            bossDamage += 4;
+            bulletSpeed += 0.025;
+            bossDamage += 2;
         }
 
         const availablePatterns = Math.min(3, boss.level);
@@ -1843,7 +1843,7 @@
 
         let attackCooldown = 78;
         if (currentDifficulty === 'easy') attackCooldown = 108;
-        if (currentDifficulty === 'hard') attackCooldown = 58;
+        if (currentDifficulty === 'hard') attackCooldown = 66;
         attackCooldown = Math.max(34, attackCooldown - (boss.level - 1) * 6);
 
         if (boss.shootTimer >= attackCooldown) {
@@ -1897,7 +1897,7 @@
 
         let eliteChance = 0.22;
         if (currentDifficulty === 'easy') eliteChance = 0.12;
-        if (currentDifficulty === 'hard') eliteChance = 0.32;
+        if (currentDifficulty === 'hard') eliteChance = 0.27;
 
         const isElite = Math.random() < eliteChance;
         const enemyMesh = new THREE.Group();
@@ -1906,14 +1906,14 @@
         
         let maxHp = isElite ? 3 : 1;
         if (currentDifficulty === 'hard') {
-            maxHp = isElite ? 5 : 2;
+            maxHp = isElite ? 4 : 2;
         } else if (currentDifficulty === 'easy') {
             maxHp = isElite ? 2 : 1;
         }
 
         let speedMultiplier = 1.0;
         if (currentDifficulty === 'easy') speedMultiplier = 0.65;
-        if (currentDifficulty === 'hard') speedMultiplier = 1.45;
+        if (currentDifficulty === 'hard') speedMultiplier = 1.25;
 
         let speed = isElite ? 0.06 : 0.09 + Math.random() * 0.05;
         speed *= speedMultiplier;
@@ -2123,7 +2123,7 @@
                 const dist = player.position.distanceTo(bullet.mesh.position);
                 if (dist < playerRadius + 0.4) {
                     let enemyDmg = 12;
-                    if (currentDifficulty === 'hard') enemyDmg = 18;
+                    if (currentDifficulty === 'hard') enemyDmg = 15;
                     if (currentDifficulty === 'easy') enemyDmg = 8;
                     if (bullet.bossDamage) enemyDmg = bullet.bossDamage;
 
@@ -2191,7 +2191,7 @@
                         if (invincibleTimer <= 0) {
                             let contactDmg = 30;
                             if (currentDifficulty === 'easy') contactDmg = 20;
-                            if (currentDifficulty === 'hard') contactDmg = 40;
+                            if (currentDifficulty === 'hard') contactDmg = 35;
                             takeDamage(contactDmg);
                         }
                         enemy.contactCooldown = 60;
@@ -2213,7 +2213,7 @@
                     addScore(earnedScore);
                 } else {
                     let contactDmg = enemy.isElite ? 40 : 25;
-                    if (currentDifficulty === 'hard') contactDmg *= 1.35;
+                    if (currentDifficulty === 'hard') contactDmg *= 1.15;
                     if (currentDifficulty === 'easy') contactDmg *= 0.7;
 
                     takeDamage(Math.round(contactDmg));
@@ -2469,7 +2469,7 @@
                 e.mesh.position.z += e.speed;
 
                 let eliteCooldown = 110;
-                if (currentDifficulty === 'hard') eliteCooldown = 75;
+                if (currentDifficulty === 'hard') eliteCooldown = 90;
                 if (currentDifficulty === 'easy') eliteCooldown = 160;
 
                 if (e.isElite) {
@@ -2479,7 +2479,7 @@
                         const enemyPos = e.mesh.position.clone();
                         let bulletSpeed = 0.24;
                         if (currentDifficulty === 'easy') bulletSpeed = 0.16;
-                        if (currentDifficulty === 'hard') bulletSpeed = 0.32;
+                        if (currentDifficulty === 'hard') bulletSpeed = 0.28;
 
                         const targetDir = player.position.clone().sub(enemyPos).normalize().multiplyScalar(bulletSpeed);
                         createBullet(enemyPos.add(new THREE.Vector3(0, 0, 1.2)), targetDir, 0xff0000, 240, 1.0, true);
