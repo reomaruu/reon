@@ -16,7 +16,7 @@
     </div>
     <div class="title-menu">
         <button class="neon-btn" onclick="openCharSelectFromTitle()">SYSTEM START</button>
-        <div class="version">VER 1.12.1 - HARD MODE REBALANCE</div>
+        <div class="version">VER 1.13.0 - MULTI FRAME SYSTEM</div>
     </div>
 </div>
 
@@ -96,7 +96,7 @@
 </div>
 
 <div id="char-select-screen">
-    <div id="char-select-title">SELECT YOUR FIGHTER</div>
+    <div id="char-select-title">CONFIGURE YOUR FIGHTER</div>
 
     <div id="difficulty-select-container">
         <span class="diff-label">DIFFICULTY:</span>
@@ -105,6 +105,7 @@
         <button class="diff-btn" id="diff-hard-btn" onclick="selectDifficulty('hard')">HARD</button>
     </div>
 
+    <div class="select-section-title">SELECT MAIN WEAPON</div>
     <div class="char-grid">
         <div class="char-card selected" onclick="selectCharacter('cobalt', this)" id="card-cobalt">
             <div class="char-color-indicator" style="background-color: #00ffff; color: #00ffff;"></div>
@@ -141,7 +142,7 @@
         <div class="char-card" onclick="selectCharacter('horizon', this)">
             <div class="char-color-indicator" style="background-color: #ff5500; color: #ff5500;"></div>
             <div class="char-name" style="color: #ff5500;">H-04 HORIZON</div>
-            <div class="char-desc">高威力の巨弾を搭載した重装型。エリートエネミーに多大な打撃を与える。</div>
+            <div class="char-desc">高威力の巨弾を搭載した重火力武装。エリートエネミーに多大な打撃を与える。</div>
             <div class="char-stats">
                 <div class="stat-row"><span>SHOT STYLE</span><span class="stat-val">HEAVY BEAM</span></div>
                 <div class="stat-row"><span>COOLDOWN</span><span class="stat-val">SLOWER</span></div>
@@ -156,6 +157,27 @@
                 <div class="stat-row"><span>SHOT STYLE</span><span class="stat-val">T-CROSSFIRE</span></div>
                 <div class="stat-row"><span>COOLDOWN</span><span class="stat-val">NORMAL</span></div>
                 <div class="stat-row"><span>POWER</span><span class="stat-val">1.0</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="chassis-section">
+        <div id="chassis-select-title">SELECT FRAME TYPE — ARMOR &amp; MOBILITY</div>
+        <div class="chassis-grid">
+            <div class="chassis-card selected" style="--chassis-color:#66aaff;" onclick="selectChassis('medium', this)">
+                <div class="chassis-name">M-CORE MEDIUM</div>
+                <div class="chassis-desc">速度と耐久力のバランスに優れた中装甲タイプ。あらゆる武装と状況に対応しやすい標準フレーム。</div>
+                <div class="chassis-spec">HP 100 / SPEED 0.32 / BOOST STANDARD</div>
+            </div>
+            <div class="chassis-card" style="--chassis-color:#ff9d33;" onclick="selectChassis('heavy', this)">
+                <div class="chassis-name">B-09 BASTION</div>
+                <div class="chassis-desc">移動とブーストは遅いが、追加装甲ポッドとHP160を持つ重装甲タイプ。正面からの激戦に強い。</div>
+                <div class="chassis-spec">HP 160 / SPEED 0.25 / ARMOR HEAVY</div>
+            </div>
+            <div class="chassis-card" style="--chassis-color:#55ff99;" onclick="selectChassis('light', this)">
+                <div class="chassis-name">S-07 SWIFT</div>
+                <div class="chassis-desc">HPは低いが、最高の通常速度・精密移動・クイックブーストを持つ軽装甲タイプ。当たり判定も小さい。</div>
+                <div class="chassis-spec">HP 70 / SPEED 0.40 / BOOST FAST</div>
             </div>
         </div>
     </div>
@@ -234,7 +256,7 @@
         <div id="survival-timer-text" style="font-size: 32px; font-weight: 900; font-family: monospace; color: #ffd700; text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);">30.0s</div>
     </div>
 
-    <div class="hud-label">Shield Integrity</div>
+    <div class="hud-label">Hull Integrity — <span id="chassis-hud-name">M-CORE MEDIUM</span> <span id="hp-status">100 / 100</span></div>
     <div id="hp-bar-container">
         <div id="hp-bar"></div>
     </div>
