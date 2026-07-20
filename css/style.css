@@ -731,6 +731,15 @@
             margin-bottom: 10px;
         }
 
+        #chassis-hud-name {
+            width: 180px;
+            margin: 1px 0 4px;
+            color: rgba(255, 255, 255, 0.72);
+            font-family: monospace;
+            font-size: 9px;
+            letter-spacing: 1.4px;
+        }
+
         #hp-bar-container {
             width: 180px;
             height: 8px;
