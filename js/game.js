@@ -1184,21 +1184,73 @@
     function fireNovaBeam() {
         if (bullets.length >= MAX_BULLETS) return;
         const beamLength = 34;
-        const beamWidth = 1.8;
+        const beamWidth = 2.2;
+        const beamLife = 22;
         const beamGroup = new THREE.Group();
-        const beamMat = new THREE.MeshBasicMaterial({
-            color: 0x66e0ff,
+
+        const makeBeamMaterial = (color, opacity) => new THREE.MeshBasicMaterial({
+            color,
             transparent: true,
-            opacity: 0.82
+            opacity,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
         });
-        const core = new THREE.Mesh(new THREE.BoxGeometry(beamWidth, 0.3, beamLength), beamMat);
+
+        // 白い芯、シアンの内光、青い外光を重ねて棒状に見えないビームにする
+        const core = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.18, 0.18, beamLength, 8, 1, true),
+            makeBeamMaterial(0xffffff, 0.96)
+        );
+        core.rotation.x = Math.PI / 2;
+        core.renderOrder = 6;
         beamGroup.add(core);
 
-        const outer = new THREE.Mesh(
-            new THREE.BoxGeometry(beamWidth * 1.55, 0.55, beamLength),
-            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, wireframe: true })
+        const innerGlow = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.34, 0.48, beamLength, 10, 1, true),
+            makeBeamMaterial(0x79f5ff, 0.54)
         );
-        beamGroup.add(outer);
+        innerGlow.rotation.x = Math.PI / 2;
+        innerGlow.renderOrder = 5;
+        beamGroup.add(innerGlow);
+
+        const outerGlow = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.70, 1.05, beamLength, 12, 1, true),
+            makeBeamMaterial(0x168cff, 0.20)
+        );
+        outerGlow.rotation.x = Math.PI / 2;
+        outerGlow.renderOrder = 4;
+        beamGroup.add(outerGlow);
+
+        const muzzleFlash = new THREE.Mesh(
+            new THREE.SphereGeometry(0.90, 10, 6),
+            makeBeamMaterial(0xbffaff, 0.72)
+        );
+        muzzleFlash.position.z = beamLength / 2;
+        muzzleFlash.scale.z = 0.65;
+        muzzleFlash.renderOrder = 7;
+        beamGroup.add(muzzleFlash);
+
+        const tipFlash = new THREE.Mesh(
+            new THREE.SphereGeometry(1.05, 10, 6),
+            makeBeamMaterial(0x39caff, 0.45)
+        );
+        tipFlash.position.z = -beamLength / 2;
+        tipFlash.scale.z = 1.45;
+        tipFlash.renderOrder = 7;
+        beamGroup.add(tipFlash);
+
+        // 発射口から先端へ流れるリングでエネルギーの移動を見せる
+        const energyRings = [];
+        for (let i = 0; i < 2; i++) {
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(0.68, 0.07, 6, 16),
+                makeBeamMaterial(i === 0 ? 0xffffff : 0x55ddff, 0.68)
+            );
+            ring.position.z = beamLength / 2 - i * (beamLength / 2);
+            ring.renderOrder = 8;
+            beamGroup.add(ring);
+            energyRings.push(ring);
+        }
 
         const startZ = player.position.z - 1.2;
         const endZ = startZ - beamLength;
@@ -1207,7 +1259,10 @@
         bullets.push({
             mesh: beamGroup,
             velocity: new THREE.Vector3(),
-            life: 18,
+            life: beamLife,
+            maxLife: beamLife,
+            beamAge: 0,
+            beamLength,
             isEnemy: false,
             damage: SUB_WEAPON_PRESETS.beam.damage,
             kind: 'beam',
@@ -1216,7 +1271,13 @@
             beamX: player.position.x,
             beamStartZ: startZ,
             beamEndZ: endZ,
-            hitEnemies: new Set()
+            hitEnemies: new Set(),
+            core,
+            innerGlow,
+            outerGlow,
+            muzzleFlash,
+            tipFlash,
+            energyRings
         });
         showNotification('NOVA BEAM — FULL OUTPUT', '#66e0ff');
     }
@@ -2212,7 +2273,7 @@
             updatePowerUpUI();
 
             let isPrecisionTriggered = keys['ShiftRight'] || isMousePressing;
-            let speed = isPrecisionTriggered ? 0.10 : 0.27;
+            let speed = isPrecisionTriggered ? 0.10 : 0.32;
 
             let finalDirection = new THREE.Vector3();
 
@@ -2315,12 +2376,41 @@
                 const b = bullets[i];
                 if (b.kind === 'beam') {
                     b.life--;
-                    const fade = Math.max(0, b.life / 18);
-                    if (b.mesh.children[0] && b.mesh.children[0].material) {
-                        b.mesh.children[0].material.opacity = 0.82 * fade;
+                    b.beamAge = (b.beamAge || 0) + 1;
+                    const fade = Math.max(0, b.life / (b.maxLife || 22));
+                    const pulse = 1 + Math.sin(b.beamAge * 0.9) * 0.12;
+
+                    if (b.core && b.core.material) {
+                        b.core.material.opacity = 0.96 * fade;
                     }
-                    if (b.mesh.children[1] && b.mesh.children[1].material) {
-                        b.mesh.children[1].material.opacity = 0.22 * fade;
+                    if (b.innerGlow && b.innerGlow.material) {
+                        b.innerGlow.material.opacity = 0.54 * fade;
+                        b.innerGlow.scale.set(pulse, 1, pulse);
+                    }
+                    if (b.outerGlow && b.outerGlow.material) {
+                        b.outerGlow.material.opacity = 0.20 * fade;
+                        const outerPulse = 1.15 - (pulse - 1) * 0.7;
+                        b.outerGlow.scale.set(outerPulse, 1, outerPulse);
+                    }
+                    if (b.muzzleFlash && b.muzzleFlash.material) {
+                        b.muzzleFlash.material.opacity = 0.72 * fade;
+                        const muzzlePulse = 0.75 + pulse * 0.28;
+                        b.muzzleFlash.scale.set(muzzlePulse, muzzlePulse, 0.65 + pulse * 0.12);
+                    }
+                    if (b.tipFlash && b.tipFlash.material) {
+                        b.tipFlash.material.opacity = 0.45 * fade;
+                        const tipPulse = 0.70 + pulse * 0.32;
+                        b.tipFlash.scale.set(tipPulse, tipPulse, 1.25 + pulse * 0.22);
+                    }
+                    if (b.energyRings) {
+                        b.energyRings.forEach((ring, ringIndex) => {
+                            const travel = (b.beamAge * 2.7 + ringIndex * (b.beamLength / 2)) % b.beamLength;
+                            ring.position.z = b.beamLength / 2 - travel;
+                            ring.rotation.z += ringIndex === 0 ? 0.18 : -0.14;
+                            ring.material.opacity = 0.68 * fade;
+                            const ringPulse = 0.88 + Math.sin(b.beamAge * 0.7 + ringIndex * Math.PI) * 0.14;
+                            ring.scale.setScalar(ringPulse);
+                        });
                     }
                 } else {
                     if (b.kind === 'missile') {
