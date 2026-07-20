@@ -47,6 +47,7 @@
 
     // キャラクター設定
     let currentSelectedType = 'cobalt';
+    let currentSelectedChassis = 'medium';
     let currentSelectedSubWeapon = 'missile';
 
     // VORTEX手動チャージショット
@@ -63,6 +64,21 @@
         rapidCooldown: 6,
         bulletScale: 1.0,
         damage: 1
+    };
+
+    let activeChassisConfig = {
+        name: 'M-CORE MEDIUM',
+        maxHP: 100,
+        moveSpeed: 0.32,
+        precisionSpeed: 0.10,
+        collisionRadius: 1.10,
+        boostSpeed: 0.75,
+        boostDuration: 9,
+        visualScaleX: 1.0,
+        visualScaleY: 1.0,
+        visualScaleZ: 1.0,
+        accentColor: 0x66aaff,
+        armorType: 'medium'
     };
 
     // 操作用
@@ -151,6 +167,52 @@
             rapidCooldown: 6,
             bulletScale: 1.1,
             damage: 1
+        }
+    };
+
+    // メイン武装とは独立して選べる機体フレーム
+    const CHASSIS_PRESETS = {
+        medium: {
+            name: 'M-CORE MEDIUM',
+            maxHP: 100,
+            moveSpeed: 0.32,
+            precisionSpeed: 0.10,
+            collisionRadius: 1.10,
+            boostSpeed: 0.75,
+            boostDuration: 9,
+            visualScaleX: 1.0,
+            visualScaleY: 1.0,
+            visualScaleZ: 1.0,
+            accentColor: 0x66aaff,
+            armorType: 'medium'
+        },
+        heavy: {
+            name: 'B-09 BASTION',
+            maxHP: 160,
+            moveSpeed: 0.25,
+            precisionSpeed: 0.08,
+            collisionRadius: 1.28,
+            boostSpeed: 0.62,
+            boostDuration: 8,
+            visualScaleX: 1.20,
+            visualScaleY: 1.12,
+            visualScaleZ: 1.10,
+            accentColor: 0xff9d33,
+            armorType: 'heavy'
+        },
+        light: {
+            name: 'S-07 SWIFT',
+            maxHP: 70,
+            moveSpeed: 0.40,
+            precisionSpeed: 0.13,
+            collisionRadius: 0.88,
+            boostSpeed: 0.92,
+            boostDuration: 10,
+            visualScaleX: 0.80,
+            visualScaleY: 0.88,
+            visualScaleZ: 1.05,
+            accentColor: 0x55ff99,
+            armorType: 'light'
         }
     };
 
@@ -453,6 +515,14 @@
         element.classList.add('selected');
     }
 
+    function selectChassis(type, element) {
+        if (!CHASSIS_PRESETS[type]) return;
+        currentSelectedChassis = type;
+        const cards = document.querySelectorAll('.chassis-card');
+        cards.forEach(card => card.classList.remove('selected'));
+        element.classList.add('selected');
+    }
+
     function selectSubWeapon(type, element) {
         if (!SUB_WEAPON_PRESETS[type]) return;
         currentSelectedSubWeapon = type;
@@ -495,7 +565,9 @@
 
     // ゲーム開始リセット（初期化処理）
     function resetGame() {
-        playerHP = 100;
+        activeChassisConfig = CHASSIS_PRESETS[currentSelectedChassis] || CHASSIS_PRESETS.medium;
+        maxHP = activeChassisConfig.maxHP;
+        playerHP = maxHP;
         score = 0;
         isGameOver = false;
         isPaused = false;
@@ -522,8 +594,7 @@
         const scoreText = document.getElementById('score-text');
         if (scoreText) scoreText.innerText = score;
         
-        const hpBar = document.getElementById('hp-bar');
-        if (hpBar) hpBar.style.width = '100%';
+        updatePlayerHPUI();
         
         const gameOverDiv = document.getElementById('game-over');
         if (gameOverDiv) gameOverDiv.style.display = 'none';
@@ -737,9 +808,16 @@
     // 自機（3Dモデル）のビルド (元の美しいネオンパルスデザインに完全復元)
     function createPlayerShip(type) {
         const config = FIGHTER_PRESETS[type] || FIGHTER_PRESETS.cobalt;
+        const chassisConfig = CHASSIS_PRESETS[currentSelectedChassis] || CHASSIS_PRESETS.medium;
         activeFighterConfig = config;
+        activeChassisConfig = chassisConfig;
 
         player = new THREE.Group();
+        player.scale.set(
+            chassisConfig.visualScaleX,
+            chassisConfig.visualScaleY,
+            chassisConfig.visualScaleZ
+        );
 
         // コックピット（機体色ネオン：BoxGeometry）
         const cockpitGeo = new THREE.BoxGeometry(0.6, 0.5, 1.4);
@@ -778,11 +856,42 @@
 
         // 後部スラスターネオン
         const thrusterGeo = new THREE.ConeGeometry(0.25, 0.7, 8);
-        const thrusterMat = new THREE.MeshBasicMaterial({ color: 0xff0055 });
+        const thrusterMat = new THREE.MeshBasicMaterial({ color: chassisConfig.accentColor });
         playerThruster = new THREE.Mesh(thrusterGeo, thrusterMat);
         playerThruster.rotation.x = Math.PI / 2;
         playerThruster.position.set(0, 0.1, 0.7);
         player.add(playerThruster);
+
+        // フレーム識別用のネオンリム
+        const frameTrim = new THREE.Mesh(
+            new THREE.TorusGeometry(0.48, 0.065, 6, 12),
+            new THREE.MeshBasicMaterial({
+                color: chassisConfig.accentColor,
+                transparent: true,
+                opacity: 0.82
+            })
+        );
+        frameTrim.rotation.x = Math.PI / 2;
+        frameTrim.position.set(0, 0.08, -0.2);
+        player.add(frameTrim);
+
+        // 重装甲フレームには左右の追加装甲ポッドを装備
+        if (chassisConfig.armorType === 'heavy') {
+            const armorGeo = new THREE.BoxGeometry(0.48, 0.42, 1.55);
+            const armorMat = new THREE.MeshStandardMaterial({
+                color: 0x25180b,
+                emissive: chassisConfig.accentColor,
+                emissiveIntensity: 0.32,
+                metalness: 0.9,
+                roughness: 0.28
+            });
+            [-1, 1].forEach(side => {
+                const armorPod = new THREE.Mesh(armorGeo, armorMat);
+                armorPod.position.set(side * 0.72, 0.15, -0.12);
+                armorPod.rotation.z = side * 0.08;
+                player.add(armorPod);
+            });
+        }
 
         // 補助シールドバリアの枠
         const barrierGeo = new THREE.SphereGeometry(1.5, 16, 16);
@@ -1388,7 +1497,7 @@
         }
 
         quickBoostDirection.copy(direction).normalize();
-        quickBoostFrames = QUICK_BOOST_DURATION;
+        quickBoostFrames = activeChassisConfig.boostDuration || QUICK_BOOST_DURATION;
         boostEnergy = Math.max(0, boostEnergy - QUICK_BOOST_ENERGY_COST);
 
         if (boostEnergy <= 0) {
@@ -1444,6 +1553,17 @@
         }
     }
 
+    function updatePlayerHPUI() {
+        const hpBar = document.getElementById('hp-bar');
+        const hpStatus = document.getElementById('hp-status');
+        const chassisName = document.getElementById('chassis-hud-name');
+        const hpRatio = maxHP > 0 ? THREE.MathUtils.clamp(playerHP / maxHP, 0, 1) : 0;
+
+        if (hpBar) hpBar.style.width = `${hpRatio * 100}%`;
+        if (hpStatus) hpStatus.innerText = `${Math.ceil(playerHP)} / ${maxHP}`;
+        if (chassisName) chassisName.innerText = activeChassisConfig.name;
+    }
+
     // 被弾処理 (被弾時のカメラ揺れシェイクを完全に排除)
     function takeDamage(amount) {
         if (isGameOver || !isGameStarted || isPaused) return;
@@ -1468,8 +1588,7 @@
         // 2. 自機HP減少
         playerHP = Math.max(0, playerHP - amount);
         
-        const hpBar = document.getElementById('hp-bar');
-        if (hpBar) hpBar.style.width = playerHP + '%';
+        updatePlayerHPUI();
 
         // ★被弾時のカメラ揺れ（カメラシェイク）の記述を完全に廃止しました★
 
@@ -2098,7 +2217,7 @@
     function handleCollisions() {
         if (isGameOver || !isGameStarted) return;
 
-        const playerRadius = 1.1;
+        const playerRadius = activeChassisConfig.collisionRadius || 1.1;
 
         // 1. プレイヤー vs アイテム
         for (let i = items.length - 1; i >= 0; i--) {
@@ -2273,7 +2392,9 @@
             updatePowerUpUI();
 
             let isPrecisionTriggered = keys['ShiftRight'] || isMousePressing;
-            let speed = isPrecisionTriggered ? 0.10 : 0.32;
+            const normalSpeed = activeChassisConfig.moveSpeed || 0.32;
+            const precisionSpeed = activeChassisConfig.precisionSpeed || 0.10;
+            let speed = isPrecisionTriggered ? precisionSpeed : normalSpeed;
 
             let finalDirection = new THREE.Vector3();
 
@@ -2298,8 +2419,10 @@
             player.position.addScaledVector(finalDirection, speed);
 
             if (quickBoostFrames > 0) {
-                const boostProgress = quickBoostFrames / QUICK_BOOST_DURATION;
-                const boostStep = QUICK_BOOST_SPEED * (0.45 + 0.55 * boostProgress);
+                const boostDuration = activeChassisConfig.boostDuration || QUICK_BOOST_DURATION;
+                const boostSpeed = activeChassisConfig.boostSpeed || QUICK_BOOST_SPEED;
+                const boostProgress = quickBoostFrames / boostDuration;
+                const boostStep = boostSpeed * (0.45 + 0.55 * boostProgress);
                 player.position.addScaledVector(quickBoostDirection, boostStep);
                 quickBoostFrames--;
             }
@@ -2578,9 +2701,8 @@
             showNotification("SHIELD ACTIVE", "#00ffff");
         } 
         else if (type === 'repair') {
-            playerHP = Math.min(100, playerHP + 10);
-            const hpBar = document.getElementById('hp-bar');
-            if (hpBar) hpBar.style.width = playerHP + '%';
+            playerHP = Math.min(maxHP, playerHP + 10);
+            updatePlayerHPUI();
             showNotification("REPAIR COMPLETED (+10 HP)", "#00ff55");
         }
         else if (type === 'rapidfire') {
