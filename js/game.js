@@ -97,6 +97,18 @@
     const QUICK_BOOST_LOCKOUT = 210;
     const QUICK_BOOST_RECHARGE_PER_FRAME = 0.22;
 
+    // Mキー・オーバードブースト（60fps基準）
+    let overdriveFrames = 0;
+    let overdriveCooldown = 0;
+    const OVERDRIVE_DURATION = 180;
+    const OVERDRIVE_COOLDOWN = 480;
+    const OVERDRIVE_MOVE_MULTIPLIER = 1.45;
+    const OVERDRIVE_FORWARD_MULTIPLIER = 0.55;
+    const OVERDRIVE_FIRE_COOLDOWN_MULTIPLIER = 0.46;
+    const OVERDRIVE_CHARGE_RATE = 2;
+    const OVERDRIVE_FOV = 76;
+    const DEFAULT_CAMERA_FOV = 60;
+
     // サブウェポン状態（60fps基準）
     let subWeaponCooldown = 0;
     let shieldGauge = 100;
@@ -560,6 +572,8 @@
         }
 
         camera.position.set(0, 15, 18);
+        camera.fov = DEFAULT_CAMERA_FOV;
+        camera.updateProjectionMatrix();
         camera.lookAt(0, 0, -2);
     }
 
@@ -621,14 +635,19 @@
         quickBoostRequested = false;
         quickBoostFrames = 0;
         quickBoostDirection.set(0, 0, 0);
+        overdriveFrames = 0;
+        overdriveCooldown = 0;
         keys['Space'] = false;
         keys['ShiftLeft'] = false;
+        keys['KeyM'] = false;
         keys['ArrowUp'] = false;
         keys['ArrowDown'] = false;
         keys['ArrowLeft'] = false;
         keys['ArrowRight'] = false;
         cameraViewLevel = 0;
         cameraHorizontalLevel = 0;
+        camera.fov = DEFAULT_CAMERA_FOV;
+        camera.updateProjectionMatrix();
 
         bullets.forEach(b => { if (b && b.mesh) disposeObject3D(b.mesh); });
         enemies.forEach(e => { if (e && e.mesh) disposeObject3D(e.mesh); });
@@ -647,6 +666,7 @@
 
         updateSubWeaponUI();
         updateBoostUI();
+        updateOverdriveUI();
         updateVortexChargeUI();
     }
 
@@ -683,7 +703,7 @@
         scene.add(gridHelper);
 
         window.addEventListener('keydown', (e) => { 
-            if ((e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'KeyN' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
+            if ((e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'KeyN' || e.code === 'KeyM' || e.code.startsWith('Arrow')) && isGameStarted && !isGameOver) {
                 e.preventDefault();
             }
             keys[e.code] = true; 
@@ -692,6 +712,9 @@
             }
             if (e.code === 'ShiftLeft' && !e.repeat && isGameStarted && !isGameOver && !isPaused) {
                 quickBoostRequested = true;
+            }
+            if (e.code === 'KeyM' && !e.repeat && isGameStarted && !isGameOver && !isPaused) {
+                activateOverdrive();
             }
             if (
                 e.code === 'KeyN' &&
@@ -1014,7 +1037,8 @@
         }
 
         if (isVortexCharging) {
-            vortexChargeFrames = Math.min(VORTEX_MAX_CHARGE, vortexChargeFrames + 1);
+            const chargeStep = overdriveFrames > 0 ? OVERDRIVE_CHARGE_RATE : 1;
+            vortexChargeFrames = Math.min(VORTEX_MAX_CHARGE, vortexChargeFrames + chargeStep);
             setVortexCockpitCharge(vortexChargeFrames / VORTEX_MAX_CHARGE);
         }
         updateVortexChargeUI();
@@ -1171,7 +1195,10 @@
 
         const isRapid = rapidfireTimer > 0;
         const cooldownVal = isRapid ? activeFighterConfig.rapidCooldown : activeFighterConfig.baseCooldown;
-        shootCooldown = cooldownVal;
+        const overdriveCooldownMultiplier = overdriveFrames > 0
+            ? OVERDRIVE_FIRE_COOLDOWN_MULTIPLIER
+            : 1;
+        shootCooldown = Math.max(2, Math.round(cooldownVal * overdriveCooldownMultiplier));
 
         const pos = player.position.clone();
         pos.z -= 1.3;
@@ -1491,8 +1518,69 @@
         }
     }
 
+    function activateOverdrive() {
+        if (overdriveFrames > 0 || overdriveCooldown > 0 || !player) return;
+
+        overdriveFrames = OVERDRIVE_DURATION;
+        quickBoostRequested = false;
+        quickBoostFrames = 0;
+        shootCooldown = Math.min(shootCooldown, 3);
+        showNotification('OVERDRIVE BOOST — FIRST PERSON', '#66eaff');
+        updateOverdriveUI();
+    }
+
+    function updateOverdriveState() {
+        if (overdriveFrames > 0) {
+            overdriveFrames--;
+            if (overdriveFrames === 0) {
+                overdriveCooldown = OVERDRIVE_COOLDOWN;
+                showNotification('OVERDRIVE COOLING', '#ff9d33');
+            }
+        } else if (overdriveCooldown > 0) {
+            overdriveCooldown--;
+            if (overdriveCooldown === 0) {
+                showNotification('OVERDRIVE READY', '#66eaff');
+            }
+        }
+
+        updateOverdriveUI();
+    }
+
+    function updateOverdriveUI() {
+        const fillEl = document.getElementById('overdrive-gauge-fill');
+        const statusEl = document.getElementById('overdrive-status');
+        if (!fillEl || !statusEl) return;
+
+        if (overdriveFrames > 0) {
+            const activeRatio = overdriveFrames / OVERDRIVE_DURATION;
+            fillEl.style.width = `${activeRatio * 100}%`;
+            fillEl.style.background = 'linear-gradient(90deg, #00aaff, #ffffff)';
+            fillEl.style.boxShadow = '0 0 12px #66eaff';
+            statusEl.innerText = `ACTIVE ${(overdriveFrames / 60).toFixed(1)}s — FIRE RATE ×2.2`;
+            statusEl.style.color = '#aaf7ff';
+        } else if (overdriveCooldown > 0) {
+            const readyRatio = 1 - overdriveCooldown / OVERDRIVE_COOLDOWN;
+            fillEl.style.width = `${readyRatio * 100}%`;
+            fillEl.style.background = 'linear-gradient(90deg, #ff6b22, #ffd166)';
+            fillEl.style.boxShadow = '0 0 8px #ff8a33';
+            statusEl.innerText = `COOLDOWN ${(overdriveCooldown / 60).toFixed(1)}s`;
+            statusEl.style.color = '#ffbb77';
+        } else {
+            fillEl.style.width = '100%';
+            fillEl.style.background = 'linear-gradient(90deg, #0088ff, #66eaff)';
+            fillEl.style.boxShadow = '0 0 10px #00aaff';
+            statusEl.innerText = 'READY — PRESS M';
+            statusEl.style.color = '#ffffff';
+        }
+    }
+
     function tryQuickBoost(direction) {
-        if (direction.lengthSq() === 0 || boostLockoutTimer > 0 || boostEnergy < QUICK_BOOST_ENERGY_COST) {
+        if (
+            direction.lengthSq() === 0 ||
+            boostLockoutTimer > 0 ||
+            boostEnergy < QUICK_BOOST_ENERGY_COST ||
+            overdriveFrames > 0
+        ) {
             return;
         }
 
@@ -2371,6 +2459,7 @@
             if (rapidfireTimer > 0) rapidfireTimer--;
             updateSubWeaponState();
             updateQuickBoostState();
+            updateOverdriveState();
             updateVortexChargeState();
 
             if (barrierVisual) {
@@ -2395,6 +2484,7 @@
             const normalSpeed = activeChassisConfig.moveSpeed || 0.32;
             const precisionSpeed = activeChassisConfig.precisionSpeed || 0.10;
             let speed = isPrecisionTriggered ? precisionSpeed : normalSpeed;
+            if (overdriveFrames > 0) speed *= OVERDRIVE_MOVE_MULTIPLIER;
 
             let finalDirection = new THREE.Vector3();
 
@@ -2417,6 +2507,9 @@
             }
 
             player.position.addScaledVector(finalDirection, speed);
+            if (overdriveFrames > 0) {
+                player.position.z -= normalSpeed * OVERDRIVE_FORWARD_MULTIPLIER;
+            }
 
             if (quickBoostFrames > 0) {
                 const boostDuration = activeChassisConfig.boostDuration || QUICK_BOOST_DURATION;
@@ -2443,7 +2536,7 @@
             }
 
             if (playerThruster) {
-                const boostFlare = quickBoostFrames > 0 ? 1.9 : 1.0;
+                const boostFlare = overdriveFrames > 0 ? 2.7 : (quickBoostFrames > 0 ? 1.9 : 1.0);
                 playerThruster.scale.setScalar((0.85 + Math.random() * 0.3) * boostFlare);
             }
 
@@ -2465,35 +2558,56 @@
                 cameraHorizontalLevel = Math.min(CAMERA_VIEW_MAX, cameraHorizontalLevel + CAMERA_VIEW_CHANGE_SPEED);
             }
 
-            const cameraViewAmount = Math.abs(cameraViewLevel);
-            const targetViewY = cameraViewLevel >= 0 ? 28.0 : 4.0;
-            const targetViewDistance = cameraViewLevel >= 0 ? 8.5 : 18.0;
-            const cameraDistance = THREE.MathUtils.lerp(12.0, targetViewDistance, cameraViewAmount);
-            const targetCamY = THREE.MathUtils.lerp(14.5, targetViewY, cameraViewAmount);
-            const lookAheadDistance = THREE.MathUtils.lerp(
-                3.5,
-                cameraViewLevel >= 0 ? 5.5 : 2.0,
-                cameraViewAmount
-            );
+            const targetFov = overdriveFrames > 0 ? OVERDRIVE_FOV : DEFAULT_CAMERA_FOV;
+            if (Math.abs(camera.fov - targetFov) > 0.02) {
+                camera.fov += (targetFov - camera.fov) * 0.16;
+                camera.updateProjectionMatrix();
+            }
 
-            // 注視点の周囲を左右に回り込み、機体と進行方向を見失わない範囲で旋回する。
-            const cameraHorizontalAngle = cameraHorizontalLevel * CAMERA_HORIZONTAL_MAX_ANGLE;
-            const orbitCenterX = player.position.x;
-            const orbitCenterZ = player.position.z - lookAheadDistance;
-            const orbitRadius = cameraDistance + lookAheadDistance;
-            const targetCamX = orbitCenterX + Math.sin(cameraHorizontalAngle) * orbitRadius;
-            const targetCamZ = orbitCenterZ + Math.cos(cameraHorizontalAngle) * orbitRadius;
+            if (overdriveFrames > 0) {
+                // コックピット直上へ寄せ、進行方向を見通す一人称オーバードブースト視点
+                const firstPersonPosition = new THREE.Vector3(
+                    player.position.x,
+                    player.position.y + 0.82,
+                    player.position.z - 0.12
+                );
+                camera.position.lerp(firstPersonPosition, 0.34);
+                camera.lookAt(
+                    player.position.x,
+                    player.position.y + 0.12,
+                    player.position.z - 24
+                );
+            } else {
+                const cameraViewAmount = Math.abs(cameraViewLevel);
+                const targetViewY = cameraViewLevel >= 0 ? 28.0 : 4.0;
+                const targetViewDistance = cameraViewLevel >= 0 ? 8.5 : 18.0;
+                const cameraDistance = THREE.MathUtils.lerp(12.0, targetViewDistance, cameraViewAmount);
+                const targetCamY = THREE.MathUtils.lerp(14.5, targetViewY, cameraViewAmount);
+                const lookAheadDistance = THREE.MathUtils.lerp(
+                    3.5,
+                    cameraViewLevel >= 0 ? 5.5 : 2.0,
+                    cameraViewAmount
+                );
 
-            camera.position.x += (targetCamX - camera.position.x) * 0.11;
-            camera.position.y += (targetCamY - camera.position.y) * 0.11;
-            camera.position.z += (targetCamZ - camera.position.z) * 0.11;
+                // 注視点の周囲を左右に回り込み、機体と進行方向を見失わない範囲で旋回する。
+                const cameraHorizontalAngle = cameraHorizontalLevel * CAMERA_HORIZONTAL_MAX_ANGLE;
+                const orbitCenterX = player.position.x;
+                const orbitCenterZ = player.position.z - lookAheadDistance;
+                const orbitRadius = cameraDistance + lookAheadDistance;
+                const targetCamX = orbitCenterX + Math.sin(cameraHorizontalAngle) * orbitRadius;
+                const targetCamZ = orbitCenterZ + Math.cos(cameraHorizontalAngle) * orbitRadius;
 
-            const lookAtTarget = new THREE.Vector3(
-                player.position.x, 
-                0, 
-                player.position.z - lookAheadDistance
-            );
-            camera.lookAt(lookAtTarget);
+                camera.position.x += (targetCamX - camera.position.x) * 0.11;
+                camera.position.y += (targetCamY - camera.position.y) * 0.11;
+                camera.position.z += (targetCamZ - camera.position.z) * 0.11;
+
+                const lookAtTarget = new THREE.Vector3(
+                    player.position.x,
+                    0,
+                    player.position.z - lookAheadDistance
+                );
+                camera.lookAt(lookAtTarget);
+            }
 
             for (let i = bullets.length - 1; i >= 0; i--) {
                 const b = bullets[i];
