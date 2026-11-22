@@ -32,3 +32,37 @@ test('upstream redirection is diagnosed instead of shown as connection failure',
   assert.equal(r.status,502);assert.equal((await r.json()).code,'REDIRECT_CAPTCHA');
  }finally{globalThis.fetch=prior}
 });
+
+test('no direct URL is distinguished from a detail failure',async()=>{
+ const base='https://pan.xunlei.com/s/VP3FQ4Mmxj-uuFrQErrhHDw9A1?pwd=rf3x';
+ const mock=async target=>{
+  const u=new URL(target);
+  if(u.pathname.endsWith('/captcha/init'))return {captcha_token:'t'};
+  if(u.pathname.endsWith('/share'))return {files:[{id:'a',name:'first.rar',size:100},{id:'b',name:'second.rar',size:200},{id:'c',name:'readme.txt',web_content_link:'https://example.com/file'}]};
+  if(u.pathname.endsWith('/share/file_info')){
+   if(u.searchParams.get('file_id')==='a')return {file_info:{id:'a'}};
+   const e=new Error('Blocked');e.code='HTTP_403_FILE_INFO';e.status=403;throw e;
+  }
+  throw Error('unknown');
+ };
+ const r=await inspectShare(base,mock);
+ assert.equal(r.summary.total,3);
+ assert.equal(r.summary.resolved,1);
+ assert.equal(r.files[0].downloadStatus,'NO_DIRECT_URL');
+ assert.equal(r.files[1].downloadStatus,'ACCESS_RESTRICTED');
+ assert.equal(r.files[1].statusDetail,'HTTP_403_FILE_INFO');
+ assert.equal(r.files[2].downloadStatus,'READY');
+ assert.ok(!JSON.stringify(r).includes('Blocked'));
+});
+test('unexpected file detail errors are not misreported as login required',async()=>{
+ const mock=async target=>{
+  const u=new URL(target);
+  if(u.pathname.endsWith('/captcha/init'))return {captcha_token:'t'};
+  if(u.pathname.endsWith('/share'))return {files:[{id:'a',name:'archive.rar'}]};
+  if(u.pathname.endsWith('/share/file_info'))throw new Error('bad upstream');
+  throw Error('unknown');
+ };
+ const r=await inspectShare('https://pan.xunlei.com/s/VP3FQ4Mmxj-uuFrQErrhHDw9A1',mock);
+ assert.equal(r.files[0].downloadStatus,'DETAIL_FAILED');
+ assert.equal(r.files[0].statusDetail,'UNKNOWN');
+});
