@@ -14,3 +14,21 @@ test('http shows page and rejects cross-origin',async()=>{
  const home=await app.fetch(new Request('https://app.example/'));assert.equal(home.status,200);assert.match(await home.text(),/Share Inspector/);
  const bad=await app.fetch(new Request('https://app.example/api/inspect',{method:'POST',headers:{'content-type':'application/json',origin:'https://evil.test'},body:JSON.stringify({url})}));assert.equal(bad.status,403);
 });
+
+test('network fetch failure gives an actionable stage code',async()=>{
+ const prior=globalThis.fetch;
+ globalThis.fetch=async()=>{throw new TypeError('connection refused')};
+ try{
+  const r=await app.fetch(new Request('https://app.example/api/inspect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})}));
+  assert.equal(r.status,502);const data=await r.json();assert.equal(data.code,'NETWORK_CAPTCHA');
+  assert.doesNotMatch(JSON.stringify(data),/connection refused/);
+ }finally{globalThis.fetch=prior}
+});
+test('upstream redirection is diagnosed instead of shown as connection failure',async()=>{
+ const prior=globalThis.fetch;
+ globalThis.fetch=async()=>new Response('',{status:302,headers:{location:'https://outside.example/'}});
+ try{
+  const r=await app.fetch(new Request('https://app.example/api/inspect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})}));
+  assert.equal(r.status,502);assert.equal((await r.json()).code,'REDIRECT_CAPTCHA');
+ }finally{globalThis.fetch=prior}
+});
