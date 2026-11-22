@@ -69,6 +69,7 @@ function remoteClient(){
    }
    if(r.status>=300&&r.status<400){
     const location=r.headers.get('location');
+    if(!location)throw new UserError('迅雷APIの転送先がありません。',502,'REDIRECT_'+stage);
     let next;
     try{next=new URL(location,target);}catch{throw new UserError('迅雷APIの転送先が不正です。',502,'REDIRECT_'+stage);}
     if(next.protocol!=='https:'||next.origin!==new URL(url).origin||next.username||next.password){
@@ -87,7 +88,7 @@ function remoteClient(){
    try{str=await r.text();}catch{throw new UserError('迅雷の応答を読み取れませんでした。',502,'READ_'+stage);}
    if(str.length>1800000)throw new UserError('APIの応答が大きすぎます。',502,'SIZE_'+stage);
    let data;try{data=JSON.parse(str);}catch{throw new UserError('APIがJSON以外の応答を返しました。',502,'INVALID_JSON_'+stage);}
-   if(data?.error||data?.error_code||(data?.errno&&String(data.errno)!=='0')||(data?.code!==undefined&&!['0','200'].includes(String(data.code)))){
+   if(data?.error||(data?.error_code!==undefined&&String(data.error_code)!=='0')||(data?.errno!==undefined&&String(data.errno)!=='0')||(data?.code!==undefined&&!['0','200'].includes(String(data.code)))){
     const code=String(data.error||data.error_code||data.errno||data.code).toUpperCase().slice(0,150);
     if(/PASS_CODE|PASSWORD/.test(code))throw new UserError('抽出コードが間違っています。',422,'PASS_CODE');
     if(/EXPIRED|NOT_FOUND|CANCELED/.test(code))throw new UserError('リンクが無効か期限切れです。',404,'EXPIRED');
