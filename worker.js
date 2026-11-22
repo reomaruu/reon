@@ -6,7 +6,7 @@ const API='https://api-pan.xunlei.com/drive/v1';
 const CAPTCHA='https://xluser-ssl.xunlei.com/v1/shield/captcha/init';
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36';
 const SALTS=['q1FLg','OECaw0higFYs7qCdOWvMEe','1UQvF/CWht+RATnmBnyakvJFHL1jaAb8MRYvdVHQLZ','OV+xWBsbnAehPNmDEUnjcVT','bbuvyCYHdJwBOtJ8Cdeg','9ROgxnyRfQInpATpkchBTZW','vXA2EpRk8','oEd','QCBQwX/','P5NlYzyVtGjJUI/dIzi+SOL+mf0Wl17','7GRbxu7OmpasI841c66J','PEVQN9w+A4wRbGoX','CJ3yz0fu1kqhPDOyL438W','tD75Q'];
-class UserError extends Error {constructor(message,status=422){super(message);this.status=status;}}
+class UserError extends Error {constructor(message,status=422,code='UNKNOWN'){super(message);this.status=status;this.code=code;}}
 const reply=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 export function parseShare(raw){
  if(typeof raw!=='string'||raw.length>3000) throw new UserError('共有URLの形式が正しくありません。',400);
@@ -40,34 +40,67 @@ function direct(x){
  for(const v of c)if(typeof v==='string'&&v.length<=8000)try{const u=new URL(v);if(u.protocol==='https:'&&u.hostname&&!u.username&&!u.password)return u.href;}catch{}
  return null;
 }
+function upstreamStage(raw){
+ const u=new URL(raw);
+ if(u.hostname==='xluser-ssl.xunlei.com')return 'CAPTCHA';
+ if(u.pathname.endsWith('/share/file_info'))return 'FILE_INFO';
+ if(u.pathname.endsWith('/share/detail'))return 'DETAIL';
+ return 'SHARE';
+}
+const stageName={CAPTCHA:'認証用トークンの発行先',SHARE:'共有情報API',DETAIL:'フォルダ一覧API',FILE_INFO:'ファイル情報API'};
 function remoteClient(){
  let calls=0;
  return async (url,options={})=>{
-  if(++calls>35)throw new UserError('APIの取得回数上限に達しました。フォルダを指定してください。');
-  const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),11000);
-  try{
-   const r=await fetch(url,{...options,signal:ctrl.signal,redirect:'error'});
-   if(r.status===401||r.status===403)throw new UserError('迅雷のログインまたはアクセス権が必要です。',r.status);
-   if(r.status===429)throw new UserError('迅雷側でアクセス制限されています。',429);
-   if(!r.ok)throw new UserError('迅雷のAPIからエラーが返されました。',502);
-   const str=await r.text();if(str.length>1800000)throw new UserError('APIの応答が大きすぎます。',502);
-   let data;try{data=JSON.parse(str);}catch{throw new UserError('APIが正しいJSONを返しませんでした。',502);}
-   if(data?.error||(typeof data?.code==='string'&&!['0','200'].includes(data.code))){
-    const code=String(data.error||data.error_code||data.code).toUpperCase();
-    if(/PASS_CODE|PASSWORD/.test(code))throw new UserError('抽出コードが間違っています。');
-    if(/EXPIRED|NOT_FOUND|CANCELED/.test(code))throw new UserError('リンクが無効か期限切れです。',404);
-    if(/CAPTCHA|RISK|RATE/.test(code))throw new UserError('迅雷のアクセス制限により取得できません。',429);
-    if(/AUTH|LOGIN|TOKEN|PERMISSION|FORBIDDEN/.test(code))throw new UserError('ログインが必要な共有の可能性があります。',401);
-    throw new UserError('迅雷のAPIがリクエストを拒否しました。',502);
+  if(++calls>35)throw new UserError('APIの取得回数上限に達しました。フォルダを指定してください。',429,'LIMIT');
+  const stage=upstreamStage(url);
+  let target=url;
+  for(let hop=0;hop<3;hop++){
+   let r;
+   for(let attempt=0;attempt<2;attempt++){
+    const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),11000);
+    try{
+     // 3xxを通信エラー扱いにしない。許可した同一ホストのHTTPS転送だけ追跡する。
+     r=await fetch(target,{...options,signal:ctrl.signal,redirect:'manual'});
+     break;
+    }catch(e){
+     if(e?.name==='AbortError')throw new UserError('迅雷の'+stageName[stage]+'への接続がタイムアウトしました。',504,'TIMEOUT_'+stage);
+     if(attempt===1)throw new UserError('迅雷の'+stageName[stage]+'へのネットワーク接続に失敗しました。通信経路または接続先の制限が考えられます。',502,'NETWORK_'+stage);
+    }finally{clearTimeout(timer);}
+   }
+   if(r.status>=300&&r.status<400){
+    const location=r.headers.get('location');
+    let next;
+    try{next=new URL(location,target);}catch{throw new UserError('迅雷APIの転送先が不正です。',502,'REDIRECT_'+stage);}
+    if(next.protocol!=='https:'||next.origin!==new URL(url).origin||next.username||next.password){
+     throw new UserError('迅雷APIが別のドメインへ転送しました。安全のため転送を中断しました。',502,'REDIRECT_'+stage);
+    }
+    if((options.method||'GET').toUpperCase()==='POST'&&![307,308].includes(r.status)){
+     throw new UserError('認証APIが予期しない転送を返しました。',502,'REDIRECT_'+stage);
+    }
+    target=next.href;
+    continue;
+   }
+   if(r.status===401||r.status===403)throw new UserError('迅雷の'+stageName[stage]+'からHTTP '+r.status+'が返されました。アクセス制限またはログイン要求の可能性があります。',r.status,'HTTP_'+r.status+'_'+stage);
+   if(r.status===429)throw new UserError('迅雷の'+stageName[stage]+'からアクセス制限（429）が返されました。',429,'HTTP_429_'+stage);
+   if(!r.ok)throw new UserError('迅雷の'+stageName[stage]+'からHTTP '+r.status+'が返されました。',502,'HTTP_'+r.status+'_'+stage);
+   let str;
+   try{str=await r.text();}catch{throw new UserError('迅雷の応答を読み取れませんでした。',502,'READ_'+stage);}
+   if(str.length>1800000)throw new UserError('APIの応答が大きすぎます。',502,'SIZE_'+stage);
+   let data;try{data=JSON.parse(str);}catch{throw new UserError('APIがJSON以外の応答を返しました。',502,'INVALID_JSON_'+stage);}
+   if(data?.error||data?.error_code||(data?.errno&&String(data.errno)!=='0')||(data?.code!==undefined&&!['0','200'].includes(String(data.code)))){
+    const code=String(data.error||data.error_code||data.errno||data.code).toUpperCase().slice(0,150);
+    if(/PASS_CODE|PASSWORD/.test(code))throw new UserError('抽出コードが間違っています。',422,'PASS_CODE');
+    if(/EXPIRED|NOT_FOUND|CANCELED/.test(code))throw new UserError('リンクが無効か期限切れです。',404,'EXPIRED');
+    if(/CAPTCHA|RISK|RATE/.test(code))throw new UserError('迅雷の認証・アクセス制限が発生しました。',429,'CAPTCHA_'+stage);
+    if(/AUTH|LOGIN|TOKEN|PERMISSION|FORBIDDEN/.test(code))throw new UserError('ログインが必要な共有の可能性があります。',401,'AUTH_'+stage);
+    throw new UserError('迅雷の'+stageName[stage]+'がリクエストを拒否しました。',502,'API_'+stage);
    }
    return data;
-  }catch(e){
-   if(e?.name==='AbortError')throw new UserError('迅雷への接続がタイムアウトしました。',504);
-   if(e instanceof UserError)throw e;
-   throw new UserError('迅雷に接続できませんでした。',502);
-  }finally{clearTimeout(timer);}
+  }
+  throw new UserError('迅雷のAPIで転送が繰り返されました。',502,'REDIRECT_'+stage);
  };
 }
+
 export async function inspectShare(url,request=remoteClient()){
  const {shareId,passCode,pathSegments}=parseShare(url);
  const device=randomBytes(16).toString('hex'),ts=String(Date.now());
@@ -129,7 +162,7 @@ const html='<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta nam
 '<form id="f"><label for="u">迅雷の共有URL</label><textarea id="u" required spellcheck="false" placeholder="https://pan.xunlei.com/s/...?pwd=...&path=..."></textarea><div><button id="go">リンクを解析</button><small id="state">URLはデータベースに保存されません</small></div></form><p id="error" role="alert" hidden></p>'+
 '<section id="results" hidden><h2>解析結果</h2><div class="stats"><span>ファイル数 <strong id="total">0</strong></span><span>直接URLあり <strong id="yes">0</strong></span><span>直接URLなし <strong id="no">0</strong></span></div><p id="notice"></p><table><thead><tr><th>ファイル名</th><th>容量</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table></section></main>'+
 '<footer>非公式の試作です。API変更により動作しない場合があります。ダウンロードにはファイルの利用許諾を確認してください。</footer>'+
-'<script>const g=id=>document.getElementById(id);const f=g("f"),go=g("go"),state=g("state"),err=g("error"),results=g("results");function bytes(n){if(!Number.isFinite(n)||n<0)return "不明";if(!n)return "0 B";const i=Math.min(4,Math.floor(Math.log(n)/Math.log(1024)));return (n/1024**i).toLocaleString("ja-JP",{maximumFractionDigits:1})+" "+["B","KB","MB","GB","TB"][i]}f.addEventListener("submit",async e=>{e.preventDefault();err.hidden=true;results.hidden=true;go.disabled=true;state.textContent="取得中…";try{const r=await fetch("/api/inspect",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({url:g("u").value.trim()})});const data=await r.json();if(!r.ok)throw new Error(data.error||"解析できませんでした");g("total").textContent=data.summary.total;g("yes").textContent=data.summary.resolved;g("no").textContent=data.summary.missing;g("notice").textContent=data.notice+(data.summary.truncated?" 一部のみ表示しています。":"");g("rows").replaceChildren();for(const x of data.files){const tr=document.createElement("tr"),td=document.createElement("td"),sz=document.createElement("td"),act=document.createElement("td");td.textContent=x.name;if(x.path){const s=document.createElement("span");s.className="path";s.textContent=x.path;td.append(s)}sz.textContent=bytes(x.size);if(x.downloadUrl){const a=document.createElement("a");a.href=x.downloadUrl;a.target="_blank";a.rel="noopener noreferrer";a.textContent="ダウンロード";act.append(a)}else{act.textContent="取得不可"}tr.append(td,sz,act);g("rows").append(tr)}results.hidden=false;state.textContent="解析完了"}catch(x){err.textContent=x.message||"エラーが発生しました";err.hidden=false;state.textContent="解析失敗"}finally{go.disabled=false}})</script></body></html>';
+'<script>const g=id=>document.getElementById(id);const f=g("f"),go=g("go"),state=g("state"),err=g("error"),results=g("results");function bytes(n){if(!Number.isFinite(n)||n<0)return "不明";if(!n)return "0 B";const i=Math.min(4,Math.floor(Math.log(n)/Math.log(1024)));return (n/1024**i).toLocaleString("ja-JP",{maximumFractionDigits:1})+" "+["B","KB","MB","GB","TB"][i]}f.addEventListener("submit",async e=>{e.preventDefault();err.hidden=true;results.hidden=true;go.disabled=true;state.textContent="取得中…";try{const r=await fetch("/api/inspect",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({url:g("u").value.trim()})});const data=await r.json();if(!r.ok)throw new Error((data.error||"解析できませんでした")+(data.code?" ["+data.code+"]":""));g("total").textContent=data.summary.total;g("yes").textContent=data.summary.resolved;g("no").textContent=data.summary.missing;g("notice").textContent=data.notice+(data.summary.truncated?" 一部のみ表示しています。":"");g("rows").replaceChildren();for(const x of data.files){const tr=document.createElement("tr"),td=document.createElement("td"),sz=document.createElement("td"),act=document.createElement("td");td.textContent=x.name;if(x.path){const s=document.createElement("span");s.className="path";s.textContent=x.path;td.append(s)}sz.textContent=bytes(x.size);if(x.downloadUrl){const a=document.createElement("a");a.href=x.downloadUrl;a.target="_blank";a.rel="noopener noreferrer";a.textContent="ダウンロード";act.append(a)}else{act.textContent="取得不可"}tr.append(td,sz,act);g("rows").append(tr)}results.hidden=false;state.textContent="解析完了"}catch(x){err.textContent=x.message||"エラーが発生しました";err.hidden=false;state.textContent="解析失敗"}finally{go.disabled=false}})</script></body></html>';
 export default {async fetch(req){
  const url=new URL(req.url);
  if(req.method==='GET'&&url.pathname==='/')return new Response(html,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"}});
@@ -143,5 +176,5 @@ export default {async fetch(req){
   let input;try{input=JSON.parse(body);}catch{return reply({error:'JSON形式が不正です。'},400);}
   if(typeof input?.url!=='string')return reply({error:'URLを入力してください。'},400);
   return reply(await inspectShare(input.url));
- }catch(e){return e instanceof UserError?reply({error:e.message},e.status):reply({error:'解析に失敗しました。'},500);}
+ }catch(e){return e instanceof UserError?reply({error:e.message,code:e.code},e.status):reply({error:'解析に失敗しました。',code:'INTERNAL'},500);}
 }};
